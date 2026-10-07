@@ -28,7 +28,10 @@ try {
 
   await frames(5);
   expect((await ev(() => window.__game.screen)) === "hideout", "should start on hideout");
-  await page.evaluate(() => localStorage.removeItem("stash.samples"));
+  await page.evaluate(() => { localStorage.removeItem("stash.grid"); localStorage.removeItem("research.points"); });
+  await page.reload();
+  await page.waitForFunction(() => window.__ready === true, null, { timeout: 15000 });
+  await frames(3);
   await page.screenshot({ path: "screenshots/play-hideout.png" });
 
   // Start the raid
@@ -81,26 +84,128 @@ try {
   info.fireButton = { held, shots: s2 - s1 };
   expect(held && s2 > s1, "FIRE button did not fire");
 
-  // Pick up the first sample, then teleport into the extraction zone
-  await ev(() => { const g = window.__game.raid; g.player.pos.x = g.samples[0].pos.x; g.player.pos.y = g.samples[0].pos.y; g.player.hp = 6; });
+  // ---- M2: grid inventory --------------------------------------------------
+  const tp = (kind) => ev((k) => {
+    const g = window.__game.raid;
+    const sm = g.samples.find((q) => !q.taken && q.item.kind === k);
+    if (!sm) return -1;
+    g.player.pos.x = sm.pos.x; g.player.pos.y = sm.pos.y; g.player.vel.x = 0; g.player.vel.y = 0; g.player.hp = 6;
+    return sm.item.uid;
+  }, kind);
+  const kinds = (grid) => ev((gr) => window.__game.raid[gr].items.map((i) => i.kind), grid);
+
+  const oreUid = await tp("ore");
+  expect(oreUid > 0, "no ore sample on the map");
   await frames(3);
-  const carried = await ev(() => window.__game.raid.player.carried);
-  expect(carried >= 1, "sample was not picked up");
+  expect((await kinds("backpack")).includes("ore"), "ore was not picked up into the backpack");
+  expect((await page.locator(".toast").count()) > 0, "no pickup toast");
+  await ev(() => { const g = window.__game.raid; g.player.pos.x = g.map.start.x; g.player.pos.y = g.map.start.y; });
+
+  // open the bag; fire must be disabled but the joystick still works
+  await page.click("#btn-bag");
+  await frames(3);
+  expect(await ev(() => window.__game.bagOpen), "bag did not open");
+  const fireShown = await ev(() => getComputedStyle(document.getElementById("btn-fire")).display);
+  expect(fireShown === "none", "fire button should be disabled while the bag is open");
+  const panelBox = await page.locator("#bag-panel").boundingBox();
+  expect(panelBox.x >= 915 * 0.35, "bag panel intrudes on the left 35%: " + panelBox.x);
+  const cellPx = await ev(() => document.querySelector("#grid-backpack").getBoundingClientRect().width / 5);
+  expect(cellPx >= 44, "cells smaller than 44px: " + cellPx);
+  await page.mouse.move(100, 200); await page.mouse.down(); await page.mouse.move(100, 260, { steps: 4 });
+  const jm = await ev(() => window.__game.input.state.move.y);
+  await page.mouse.up();
+  expect(jm > 0.9, "joystick broken while bag open");
+  await frames(5);
+  await page.screenshot({ path: "screenshots/play-bag.png" });
+
+  // real mouse drag: ore from backpack to notebook
+  const src = await page.locator(`#grid-backpack [data-kind="ore"]`).boundingBox();
+  const dst = await page.locator("#grid-notebook").boundingBox();
+  await page.mouse.move(src.x + src.width / 2, src.y + src.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(dst.x + src.width / 2 + 2, dst.y + src.height / 2 + 2, { steps: 12 });
+  await frames(2);
+  await page.screenshot({ path: "screenshots/play-bag-drag.png" });
+  await page.mouse.up();
+  await frames(3);
+  const nbKinds = await kinds("notebook"), bpKinds = await kinds("backpack");
+  info.bag = { notebook: nbKinds, backpack: bpKinds };
+  expect(nbKinds.includes("ore") && !bpKinds.includes("ore"), "drag did not move ore to the notebook");
+
+  // quartz into the backpack, then die
+  const quartzUid = await tp("quartz");
+  await frames(3);
+  expect((await kinds("backpack")).includes("quartz"), "quartz not picked up");
+  await page.screenshot({ path: "screenshots/play-bag2.png" });
+  await ev(() => { window.__game.openBag(false); window.__game.raid.player.hp = 0; });
+  await page.waitForFunction(() => window.__game.screen === "results", null, { timeout: 90000 });
+  const deadText = await ev(() => document.querySelector("#screen-results").innerText);
+  info.deadResult = deadText;
+  expect(deadText.includes("수첩"), "death result should mention the notebook");
+  const st1 = await ev(() => window.__game.stashGrid.items.map((i) => i.uid + ":" + i.kind));
+  info.stashAfterDeath = st1;
+  expect(st1.length === 1 && st1[0] === `${oreUid}:ore`, "stash should hold only the notebook ore: " + st1);
+  expect(!st1.some((s) => s.startsWith(quartzUid + ":")), "backpack quartz leaked into the stash");
+  const persisted = await ev(() => localStorage.getItem("stash.grid"));
+  expect(persisted && persisted.includes('"ore"'), "stash not persisted");
+
+  // hideout: select the ore, analyze it
+  await page.click("#btn-hideout");
+  await page.waitForFunction(() => window.__game.screen === "hideout", null, { timeout: 5000 });
+  await frames(3);
+  await page.locator(`#grid-stash [data-kind="ore"]`).click();
+  await frames(2);
+  await page.screenshot({ path: "screenshots/play-stash.png" });
+  const pts0 = await ev(() => window.__game.points);
+  const expectPts = await ev(() => { const i = window.__game.stashGrid.items[0]; return Math.round(60 * Math.pow(2, -i.age / 90)); });
+  await page.click("#btn-analyze");
+  await frames(2);
+  const pts1 = await ev(() => window.__game.points);
+  info.analyze = { pts0, pts1, expectPts };
+  expect(pts1 === pts0 + expectPts && pts1 > pts0, "research points did not increase by the ore value");
+  expect((await ev(() => window.__game.stashGrid.items.length)) === 0, "analyzed ore still in stash");
+  expect((await ev(() => localStorage.getItem("research.points"))) === String(pts1), "points not persisted");
+
+  // second raid: normal extraction carries backpack + notebook home
+  await page.click("#btn-start");
+  await page.waitForFunction(() => window.__game.screen === "raid", null, { timeout: 5000 });
+  await frames(3);
+  const u1 = await tp("ore"); await frames(3);
+  const u2 = await tp("quartz"); await frames(3);
+  const u3 = await tp("bio"); await frames(3);
+  const carriedNow = await ev(() => window.__game.raid.carriedItems.map((i) => i.uid));
+  expect([u1, u2, u3].every((u) => carriedNow.includes(u)), "second raid pickups missing: " + carriedNow);
+  await ev(() => window.__game.openBag(true));
+  await frames(3);
+  await page.screenshot({ path: "screenshots/play-bag3.png" });
+  await ev(() => window.__game.openBag(false));
+  // drop test: drag the quartz out onto the trash zone, then it must lie on the ground
+  await ev(() => window.__game.openBag(true)); await frames(2);
+  const qb = await page.locator(`#grid-backpack [data-kind="quartz"]`).boundingBox();
+  const tb = await page.locator("#bag-trash").boundingBox();
+  await page.mouse.move(qb.x + qb.width / 2, qb.y + qb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2, { steps: 10 });
+  await page.mouse.up();
+  await frames(3);
+  const afterDrop = await ev(() => ({ held: window.__game.raid.carriedItems.map((i) => i.kind), ground: window.__game.raid.samples.filter((s) => !s.taken && s.blocked).length }));
+  info.drop = afterDrop;
+  expect(!afterDrop.held.includes("quartz") && afterDrop.ground >= 1, "dropping on the trash zone failed");
+  await ev(() => window.__game.openBag(false));
+  const expectUids = await ev(() => window.__game.raid.carriedItems.map((i) => i.uid));
   await ev(() => { const g = window.__game.raid; g.player.pos.x = g.map.extraction.x; g.player.pos.y = g.map.extraction.y; g.player.vel.x = 0; g.player.vel.y = 0; g.player.hp = 6; });
   await frames(12);
-  const prog = await ev(() => window.__game.raid.extractProgress);
-  info.extractProgress = +prog.toFixed(2);
   await page.waitForFunction(() => window.__game.screen === "results", null, { timeout: 90000 });
   const res = await ev(() => ({ state: window.__game.raid.state, text: document.querySelector("#screen-results").innerText }));
   info.result = res;
-  expect(res.state === "extracted" && res.text.includes("탈출"), "extraction result not shown: " + JSON.stringify(res));
+  expect(res.state === "extracted" && res.text.includes("탈출") && res.text.includes("총 가치"), "extraction result not shown: " + JSON.stringify(res));
   await page.screenshot({ path: "screenshots/play-result.png" });
-
+  const stashUids = await ev(() => window.__game.stashGrid.items.map((i) => i.uid));
+  expect(expectUids.length >= 2 && expectUids.every((u) => stashUids.includes(u)), `stash ${stashUids} missing ${expectUids}`);
   await page.click("#btn-hideout");
   await page.waitForFunction(() => window.__game.screen === "hideout", null, { timeout: 5000 });
-  const stash = await ev(() => window.__game.stash);
-  info.stash = { carried, stash };
-  expect(stash === carried, `stash ${stash} != carried ${carried}`);
+  await frames(3);
+  await page.screenshot({ path: "screenshots/play-stash2.png" });
   info.fps = await ev(() => window.__fps);
 } catch (e) {
   errors.push("exception: " + (e?.stack || e));

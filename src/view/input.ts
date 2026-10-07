@@ -7,6 +7,7 @@ export class Input {
   /** Live values handed to Raid.step. */
   readonly state: RaidInput = { move: { x: 0, y: 0 }, fire: false };
   private enabled = false;
+  private fireLocked = false;
   private joyId: number | null = null;
   private fireId: number | null = null;
   private origin = { x: 0, y: 0 };
@@ -42,7 +43,7 @@ export class Input {
 
     const F = this.fireBtn;
     F.addEventListener("pointerdown", (e) => {
-      if (!this.enabled || this.fireId !== null) return;
+      if (!this.enabled || this.fireLocked || this.fireId !== null) return;
       e.preventDefault();
       this.fireId = e.pointerId;
       F.setPointerCapture(e.pointerId);
@@ -58,6 +59,7 @@ export class Input {
       if (!this.enabled) return;
       const k = key(e);
       if (!k) return;
+      if (this.fireLocked && k === "fire") return;
       e.preventDefault();
       this.keys.add(k); this.refresh();
     });
@@ -68,8 +70,17 @@ export class Input {
 
   setEnabled(on: boolean) {
     this.enabled = on;
-    this.layer.style.display = this.fireBtn.style.display = on ? "block" : "none";
+    this.layer.style.display = on ? "block" : "none";
+    this.fireBtn.style.display = on && !this.fireLocked ? "block" : "none";
     if (!on) { this.releaseJoy(); this.fireId = null; this.fireBtn.classList.remove("down"); this.keys.clear(); }
+    this.refresh();
+  }
+
+  /** Disable (and hide) the fire button, e.g. while the bag is open; the joystick keeps working. */
+  setFireLocked(lock: boolean) {
+    this.fireLocked = lock;
+    if (lock) { this.fireId = null; this.fireBtn.classList.remove("down"); this.keys.delete("fire"); }
+    this.fireBtn.style.display = this.enabled && !lock ? "block" : "none";
     this.refresh();
   }
 
@@ -97,7 +108,7 @@ export class Input {
     const usingJoy = this.joyId !== null;
     this.state.move.x = usingJoy ? this.joy.x : kx;
     this.state.move.y = usingJoy ? this.joy.y : ky;
-    this.state.fire = this.fireId !== null || k.has("fire");
+    this.state.fire = !this.fireLocked && (this.fireId !== null || k.has("fire"));
   }
 }
 

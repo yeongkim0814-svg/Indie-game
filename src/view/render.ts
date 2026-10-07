@@ -8,9 +8,10 @@
  *      (so a rock in a later row, drawn afterwards, hides entities standing behind it)
  *   5. particles, daylight tint, damage flash
  */
+import { ITEMS, itemValue, type Item } from "../game/items";
 import type { Crawler, Raid } from "../game/raid";
 import type { ParsedMap } from "../game/raidMap";
-import { FLOWER, GRASS, ROCK, SHADOW, hash2 } from "./palette";
+import { FLOWER, GRASS, ROCK, SHADOW, hash2, mix } from "./palette";
 import { drawVista } from "./vista";
 
 export const TILE = 16;
@@ -18,7 +19,7 @@ export const VIEW_H = 180;
 const BLOCK = 8; // rock height in px (top face is raised by this much)
 
 interface Particle { x: number; y: number; vx: number; vy: number; g: number; life: number; max: number; color: string; size: number }
-interface Item { y: number; draw: () => void }
+interface Drawable { y: number; draw: () => void }
 
 export class Renderer {
   readonly ctx: CanvasRenderingContext2D;
@@ -202,7 +203,9 @@ export class Renderer {
     g.fillStyle = flash ? "#ffffff" : "#f2c14e"; g.fillRect(fx - 2, fy - 6, 1, 1); g.fillRect(fx + 1, fy - 6, 1, 1);
   }
 
-  private drawSample(fx: number, fy: number, k: number) {
+  private drawSample(fx: number, fy: number, k: number, it: Item) {
+    if (it.kind === "ore") return this.drawOre(fx, fy, k, it);
+    if (it.kind === "bio") return this.drawBio(fx, fy, k, it);
     const g = this.ctx, bob = Math.round(Math.sin(this.t * 3 + k * 1.7) * 1.5);
     this.shadow(fx, fy, 3);
     const y = fy - 7 + bob;
@@ -210,6 +213,33 @@ export class Renderer {
     g.fillRect(fx - 1, y, 2, 1); g.fillRect(fx - 2, y + 1, 4, 1); g.fillRect(fx - 3, y + 2, 6, 2); g.fillRect(fx - 2, y + 4, 4, 1); g.fillRect(fx - 1, y + 5, 2, 1);
     g.fillStyle = "#c9fff4"; g.fillRect(fx - 1, y + 1, 1, 2);
     g.fillStyle = "#2f8f88"; g.fillRect(fx + 1, y + 3, 2, 1); g.fillRect(fx, y + 4, 2, 1);
+  }
+
+  /** Radioactive ore: tall yellow-green rock whose glow fades as it decays. */
+  private drawOre(fx: number, fy: number, k: number, it: Item) {
+    const g = this.ctx, q = Math.max(0, Math.min(1, itemValue(it) / ITEMS.ore.value));
+    this.shadow(fx, fy, 4);
+    const pulse = 0.5 + 0.5 * Math.sin(this.t * 4 + k), glow = q * (0.12 + 0.2 * pulse);
+    g.fillStyle = `rgba(200,224,90,${glow.toFixed(3)})`;
+    g.fillRect(fx - 6, fy - 14, 12, 14); g.fillRect(fx - 5, fy - 16, 10, 2);
+    const base = "#c8e05a", lit = mix(base, "#f4ffc0", 0.4 + 0.3 * pulse * q), dim = mix(base, ROCK[2], Math.min(1, 1 - q * 0.8 + 0.1)), dark = mix(base, ROCK[1], 0.55 + (1 - q) * 0.3);
+    g.fillStyle = dim; g.fillRect(fx - 3, fy - 12, 6, 11); g.fillRect(fx - 2, fy - 13, 4, 1); g.fillRect(fx - 4, fy - 9, 8, 7);
+    g.fillStyle = dark; g.fillRect(fx + 1, fy - 10, 3, 9); g.fillRect(fx - 4, fy - 3, 8, 2);
+    g.fillStyle = lit; g.fillRect(fx - 2, fy - 12, 2, 5); g.fillRect(fx - 3, fy - 8, 1, 3);
+    g.fillStyle = "#f4ffc0"; g.fillRect(fx - 1, fy - 11, 1, 2);
+  }
+
+  /** Biological specimen: pink-purple pod that browns as it rots. */
+  private drawBio(fx: number, fy: number, k: number, it: Item) {
+    const g = this.ctx, f = Math.max(0, Math.min(1, it.fresh)), bob = Math.round(Math.sin(this.t * 2 + k) * 0.8);
+    this.shadow(fx, fy, 5);
+    const rot = 1 - f, y = fy - 9 + bob;
+    const body = mix("#c06090", "#7a5a3a", rot), lit = mix("#e890b8", "#a08460", rot), dark = mix("#80305f", "#4a3624", rot);
+    g.fillStyle = dark; g.fillRect(fx - 4, y + 3, 8, 5); g.fillRect(fx - 3, y + 8, 6, 1);
+    g.fillStyle = body; g.fillRect(fx - 3, y, 6, 8); g.fillRect(fx - 4, y + 2, 8, 5); g.fillRect(fx - 2, y - 1, 4, 1);
+    g.fillStyle = lit; g.fillRect(fx - 2, y + 1, 2, 3); g.fillRect(fx - 3, y + 2, 1, 2);
+    g.fillStyle = mix("#6fe0a0", "#6a5a30", rot); g.fillRect(fx, y - 3, 1, 3); g.fillRect(fx + 1, y - 3, 2, 1); // stem
+    if (f > 0.5) { g.fillStyle = "#ffd0e4"; g.fillRect(fx + 1, y + 4, 1, 1); } // fresh sheen
   }
 
   private drawExtraction(raid: Raid, ox: number, oy: number) {
@@ -300,12 +330,12 @@ export class Renderer {
     this.consumeEvents(raid);
 
     // entities, sorted by feet y
-    const items: Item[] = [];
+    const items: Drawable[] = [];
     const vis = (x: number, y: number) => x - ox > -20 && x - ox < W + 20 && y - oy > -20 && y - oy < H + 30;
     raid.samples.forEach((s, i) => {
       if (s.taken) return;
       const fx = Math.round(s.pos.x * TILE), fy = Math.round(s.pos.y * TILE) + 3;
-      if (vis(fx, fy)) items.push({ y: fy, draw: () => this.drawSample(fx - ox, fy - oy, i) });
+      if (vis(fx, fy)) items.push({ y: fy, draw: () => this.drawSample(fx - ox, fy - oy, i, s.item) });
     });
     for (const c of raid.crawlers) {
       if (!c.alive) continue;
