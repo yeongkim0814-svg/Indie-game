@@ -117,4 +117,4 @@
 - `src/game/raid.ts`, `raidMap.ts`: 원정 시뮬레이션 (렌더링과 분리, Vitest로 검증)
 - `src/physics/`: 물리 수식
 - `src/view/`: Canvas2D 렌더, 입력, HUD
-- 구 3D 코드(`src/main.ts`, `src/render/`, `src/ui/`, `src/game/{sim,world,player,config,energy}.ts`)는 삭제 예정
+- 구 3D 코드는 삭제됨 (커밋 `7d23477`에서 확인 가능)

@@ -8,14 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
     "test": "vitest run",
-    "check:webgl": "node scripts/check-webgl.mjs",
     "check:play": "node scripts/check-play.mjs"
   },
-  "dependencies": {
-    "three": "^0.186.1"
-  },
   "devDependencies": {
-    "@types/three": "^0.186.0",
     "playwright-core": "^1.63.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.3",
