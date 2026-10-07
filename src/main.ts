@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { SLUGS } from "./game/config";
 import { GameSim, idleInput, type SimInput } from "./game/sim";
-import { heightAt } from "./game/world";
+import { SPAWN, heightAt } from "./game/world";
 import { createHud } from "./ui/hud";
 import { createInput } from "./ui/input";
 import { buildMonoliths, buildTerrain } from "./render/terrain";
@@ -10,7 +10,9 @@ import { buildClouds } from "./render/clouds";
 import { buildGrass } from "./render/grass";
 import { buildWanderer } from "./render/wanderer";
 import { createPixelPipeline } from "./render/pixel";
-import { FOG_DENSITY, SKY, SUN_DIR } from "./render/atmosphere";
+import { FOG_DENSITY, SKY, SUN_DIR, capSceneFog } from "./render/atmosphere";
+
+capSceneFog();
 
 // ?lite: cheap scene for headless checks (software GL runs at ~1 fps otherwise)
 const LITE = new URLSearchParams(location.search).has("lite");
@@ -21,7 +23,7 @@ const pixel = createPixelPipeline(renderer);
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(SKY.horizon, FOG_DENSITY);
-const camera = new THREE.PerspectiveCamera(68, 1, 0.1, 3200);
+const camera = new THREE.PerspectiveCamera(68, 1, 0.5, 3200);
 scene.add(new THREE.HemisphereLight(new THREE.Color("#bcd4f5"), new THREE.Color("#3f5530"), 1.4));
 const sun = new THREE.DirectionalLight(0xfff1dc, 3.2);
 sun.position.copy(SUN_DIR).multiplyScalar(100);
@@ -31,19 +33,15 @@ const sky = buildSky();
 const clouds = buildClouds();
 scene.add(sky, clouds, buildTerrain(LITE ? 90 : 300));
 
-// Capture sky + clouds once so the monoliths mirror them.
-const cubeRT = new THREE.WebGLCubeRenderTarget(LITE ? 32 : 256, { type: THREE.HalfFloatType });
-const cubeCam = new THREE.CubeCamera(1, 3000, cubeRT);
-cubeCam.position.set(0, 120, -200);
-scene.add(cubeCam);
-cubeCam.update(renderer, scene);
-scene.add(buildMonoliths(cubeRT.texture));
+scene.add(buildMonoliths());
 
 const grass = buildGrass(LITE ? 3000 : 40000);
 scene.add(grass.mesh);
 
 const sim = new GameSim();
 const input = createInput(document.body);
+input.yaw = SPAWN.yaw;
+input.pitch = -0.24; // look slightly down so the camera rises above the rim and sees the valley
 const updateHud = createHud(document.body);
 
 const player = new THREE.Group();

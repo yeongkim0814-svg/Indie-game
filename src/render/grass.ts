@@ -46,6 +46,7 @@ export function buildGrass(count: number) {
       attribute vec4 aInst;
       varying float vT, vRand, vFade;
       varying vec3 vView;
+      varying vec2 vPatch;
       ${GLSL_TERRAIN}
       void main() {
         vec2 off = mod(aInst.xy - uCenter + uTile * 0.5, uTile) - uTile * 0.5;
@@ -66,7 +67,7 @@ export function buildGrass(count: number) {
         p.x += sway; p.z += sway * 0.6;
         vec3 world = vec3(wp.x, terrainHeight(wp), wp.y) + p;
         vec4 mv = viewMatrix * vec4(world, 1.0);
-        vT = t; vRand = rand; vView = mv.xyz;
+        vT = t; vRand = rand; vView = mv.xyz; vPatch = wp / 2.5;
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: /* glsl */ `
@@ -74,15 +75,19 @@ export function buildGrass(count: number) {
       uniform float uFog;
       varying float vT, vRand, vFade;
       varying vec3 vView;
+      varying vec2 vPatch;
       ${GLSL_FOG}
       void main() {
         if (vFade < 0.02) discard;
-        vec3 root = vec3(0.035, 0.09, 0.025);
-        vec3 tip = mix(vec3(0.20, 0.42, 0.06), vec3(0.42, 0.55, 0.10), vRand);
+        vec3 root = vec3(0.012, 0.035, 0.014);
+        vec3 tip = mix(vec3(0.05, 0.13, 0.04), vec3(0.11, 0.20, 0.05), vRand);
+        // patches of sunlit tips (yellow-green), clustered by world position
+        float sunlit = smoothstep(0.55, 0.8, fract(sin(dot(floor(vPatch), vec2(12.9898, 78.233))) * 43758.5453));
+        tip = mix(tip, vec3(0.42, 0.55, 0.16), sunlit * vT * vT);
         vec3 col = mix(root, tip, vT);
         float sun = max(uSunDir.y, 0.0) * 1.25 + 0.35;
         col *= sun;
-        if (vRand > 0.965 && vT > 0.8) col = vec3(1.1, 1.1, 1.05);
+        if (vRand > 0.975 && vT > 0.75) col = vec3(1.3, 1.32, 1.3);
         col = applyAerial(col, length(vView), uFog, uHorizon);
         gl_FragColor = vec4(col, 1.0);
       }`,

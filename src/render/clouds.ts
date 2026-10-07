@@ -18,6 +18,20 @@ function cumulus(out: Puff[], cx: number, cz: number, base: number, width: numbe
     const r = (width * 0.22) * (1 - t * 0.45) * (0.7 + rand() * 0.6);
     out.push({ x: cx + Math.cos(a) * d, y: base + t * height, z: cz + Math.sin(a) * d * 0.7, r, shade: t });
   }
+  // small cauliflower lumps on the upper surface: the reference's dense pixel clusters
+  const big = out.slice(-n);
+  for (const p of big) {
+    if (p.shade < 0.35) continue;
+    const k = 3 + Math.floor(rand() * 4);
+    for (let i = 0; i < k; i++) {
+      const th = rand() * Math.PI * 2, ph = rand() * 1.2;
+      const rr = p.r * (0.28 + rand() * 0.22);
+      out.push({
+        x: p.x + Math.cos(th) * Math.sin(ph) * p.r * 0.9, y: p.y + Math.cos(ph) * p.r * 0.85,
+        z: p.z + Math.sin(th) * Math.sin(ph) * p.r * 0.9, r: rr, shade: Math.min(1, p.shade + 0.15),
+      });
+    }
+  }
 }
 
 /** Flat sea of cloud near the horizon. */
@@ -34,15 +48,16 @@ export function buildClouds(): THREE.Mesh {
   const rand = rng(7);
   const puffs: Puff[] = [];
   // Cloud walls framing the monolith valley ahead, plus some all around for 360° openness.
+  // Towers framing the view from the rim (+x), plus a ring for 360° openness.
   const towers: [number, number, number, number][] = [
-    [-60, -520, 150, 240], [180, -480, 170, 280], [-300, -380, 140, 200], [380, -300, 130, 220],
-    [-480, -60, 150, 180], [500, 80, 140, 200], [-200, 420, 160, 170], [260, 460, 150, 210],
-    [60, -760, 220, 300], [-620, -500, 200, 240],
+    [820, 330, 220, 300], [380, -380, 170, 280], [700, -330, 200, 280], [360, 430, 180, 260], [900, 20, 160, 140],
+    [720, 300, 200, 280], [-420, -260, 160, 220], [-480, 200, 150, 200], [60, 520, 170, 220],
+    [80, -620, 200, 260], [-150, 700, 220, 260],
   ];
-  for (const [x, z, w, h] of towers) cumulus(puffs, x, z, -40 + rand() * 30, w, h, rand);
+  for (const [x, z, w, h] of towers) cumulus(puffs, x, z, -30 + rand() * 25, w, h, rand);
   for (let i = 0; i < 14; i++) {
     const a = (i / 14) * Math.PI * 2 + rand() * 0.2, d = 820 + rand() * 200;
-    stratus(puffs, Math.cos(a) * d, Math.sin(a) * d, -55 + rand() * 20, 260, rand);
+    stratus(puffs, Math.cos(a) * d, Math.sin(a) * d, -34 + rand() * 14, 260, rand);
   }
 
   const quad = new THREE.PlaneGeometry(2, 2);
@@ -60,8 +75,8 @@ export function buildClouds(): THREE.Mesh {
     uniforms: {
       uSunDir: { value: SUN_DIR },
       uHorizon: { value: SKY.horizon },
-      uLit: { value: new THREE.Color("#ffffff").multiplyScalar(1.35) },
-      uShadow: { value: new THREE.Color("#8ea6c6") },
+      uLit: { value: new THREE.Color("#ffffff").multiplyScalar(1.6) },
+      uShadow: { value: new THREE.Color("#6f97bd") },
       uFog: { value: CLOUD_FOG_DENSITY },
     },
     vertexShader: /* glsl */ `
@@ -100,13 +115,13 @@ export function buildClouds(): THREE.Mesh {
         float d = length(p) + (bumps - 0.4) * 0.35;
         if (d > 1.0) discard;
         float z = sqrt(max(1.0 - d * d, 0.0));
-        vec3 n = normalize(vec3(p, z));
+        // lumpy normal: breaks smooth sphere shading into cauliflower clusters
+        vec2 lump = vec2(noise(p * 4.0 + vSeed * 31.0), noise(p * 4.0 - vSeed * 23.0)) - 0.5;
+        vec3 n = normalize(vec3(p + lump * 0.9, z));
         vec3 sunView = normalize((viewMatrix * vec4(uSunDir, 0.0)).xyz);
         float wrap = clamp(dot(n, sunView) * 0.6 + 0.45, 0.0, 1.0);
-        float lit = wrap * mix(0.55, 1.0, vShade);
-        // hard light bands: clouds read as stacked pixel clusters, not airbrush
-        lit = floor(lit * 4.0 + 0.5) / 4.0;
-        vec3 col = mix(uShadow, uLit, smoothstep(0.1, 0.95, lit));
+        float lit = wrap * mix(0.45, 1.0, vShade);
+        vec3 col = mix(uShadow, uLit, smoothstep(0.15, 0.95, lit));
         // silver lining where the sun sits behind the puff
         float back = max(-sunView.z, 0.0);
         col += uLit * 0.35 * back * smoothstep(0.82, 0.97, d);

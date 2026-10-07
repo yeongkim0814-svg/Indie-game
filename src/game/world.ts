@@ -19,21 +19,25 @@ export function terrainHeight(x: number, z: number): number {
   if (t <= 0) return plateau;
   const river = 70 + 140 * Math.sin(z * 0.004) + 40 * Math.sin(z * 0.011);
   const carve = 5 * (1 - smooth(10, 30, Math.abs(x - river)));
-  const valley = VALLEY_FLOOR + 3 * Math.sin(x * 0.02) * Math.cos(z * 0.017) - carve;
+  // rolling ridges inside the valley give layered silhouettes at mid distance
+  const ridge = Math.max(0, Math.sin(x * 0.012 + Math.cos(z * 0.009) * 2) * Math.sin(z * 0.01 + 0.7));
+  const hills = Math.pow(ridge, 1.5) * 55 * smooth(130, 220, Math.hypot(x, z + 20));
+  const valley = VALLEY_FLOOR + 3 * Math.sin(x * 0.02) * Math.cos(z * 0.017) + hills - carve;
   return plateau + (valley - plateau) * t;
 }
 
 /** Plateau the player starts on; keep in sync with GLSL_TERRAIN. */
 export const PLATEAU = { rx: 95, rz: 115, cz: -20 };
-export const VALLEY_FLOOR = -72;
-export const WATER_LEVEL = -74.5;
+export const VALLEY_FLOOR = -38;
+export const WATER_LEVEL = -40.5;
 
 function smooth(e0: number, e1: number, x: number) {
   const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
   return t * t * (3 - 2 * t);
 }
 
-export const SPAWN = { x: 0, z: 0 };
+/** Start at the plateau rim (cliff drops at x≈91), facing out over the valley (+x). */
+export const SPAWN = { x: 85, z: -20, yaw: -Math.PI / 2 };
 
 function pillarAt(x: number, z: number, r: number, rise: number, name: string): Pillar {
   return { x, z, r, top: terrainHeight(x, z) + rise, name };
@@ -48,9 +52,9 @@ export const PILLARS: Pillar[] = [
 export const SUMMIT = PILLARS[2];
 
 export const CRATE_SPAWNS = [
-  { x: 8, z: -8 },
-  { x: -9, z: -12 },
-  { x: 12, z: -18 },
+  { x: 70, z: -12 },
+  { x: 64, z: -30 },
+  { x: 58, z: -16 },
 ];
 
 /** Colossal monoliths: axis-aligned boxes. `top` is world height of the roof. */
@@ -64,15 +68,15 @@ export interface Monolith {
 }
 
 export const MONOLITHS: Monolith[] = [
-  { x: -95, z: -170, hx: 22, hz: 34, top: 260 },
-  { x: 120, z: -240, hx: 30, hz: 20, top: 330 },
-  { x: 20, z: -420, hx: 26, hz: 26, top: 380 },
+  { x: 330, z: -230, hx: 32, hz: 32, top: 420 },
+  { x: 430, z: 170, hx: 40, hz: 26, top: 380 },
   { x: -230, z: 60, hx: 18, hz: 40, top: 240 },
+  { x: 120, z: -470, hx: 26, hz: 26, top: 360 },
 ];
 
-/** Slab spanning the top of two monoliths (visual only, out of reach). */
-export const SPANS: { a: number; b: number; y: number; thick: number; width: number }[] = [
-  { a: 0, b: 1, y: 230, thick: 22, width: 30 },
+/** Colossal tilted slabs hanging in the sky (visual only, out of reach). */
+export const SLABS: { x: number; y: number; z: number; w: number; h: number; len: number; yaw: number; pitch: number }[] = [
+  { x: 230, y: 330, z: 170, w: 120, h: 40, len: 900, yaw: 0.35, pitch: -0.32 },
 ];
 
 export function heightAt(x: number, z: number): number {

@@ -1,11 +1,32 @@
 import * as THREE from "three";
-import { MONOLITHS, PILLARS, SPANS, WATER_LEVEL, terrainHeight } from "../game/world";
+import { MONOLITHS, PILLARS, SLABS, VALLEY_FLOOR, WATER_LEVEL, terrainHeight } from "../game/world";
 
-function noise2(x: number, z: number) {
-  return Math.sin(x * 0.013 + Math.sin(z * 0.021) * 2) * 0.5 + Math.sin(z * 0.017 + x * 0.006) * 0.5;
+function hash(x: number, y: number) {
+  const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return s - Math.floor(s);
+}
+function vnoise(x: number, y: number) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = hash(ix, iy), b = hash(ix + 1, iy), c = hash(ix, iy + 1), d = hash(ix + 1, iy + 1);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function fbm(x: number, y: number, oct = 4) {
+  let v = 0, amp = 0.5, f = 1;
+  for (let i = 0; i < oct; i++) { v += vnoise(x * f, y * f) * amp; f *= 2.03; amp *= 0.5; }
+  return v;
+}
+/** Ridged noise: sharp crests, like eroded mountain spines. */
+function ridged(x: number, y: number) {
+  let v = 0, amp = 0.55, f = 1;
+  for (let i = 0; i < 5; i++) { v += (1 - Math.abs(vnoise(x * f, y * f) * 2 - 1)) ** 2 * amp; f *= 2.1; amp *= 0.5; }
+  return v;
 }
 
-/** Ground: green near, fading into the aerial haze by the scene fog. */
+/**
+ * Ground colors follow the reference: dark, muted foreground greens; steep faces
+ * become deep blue-gray rock. Distance and haze are left to the fog.
+ */
 export function buildTerrain(segments = 300): THREE.Object3D {
   const group = new THREE.Group();
   const geo = new THREE.PlaneGeometry(1800, 1800, segments, segments);
@@ -15,18 +36,19 @@ export function buildTerrain(segments = 300): THREE.Object3D {
   geo.computeVertexNormals();
   const nrm = geo.attributes.normal;
   const colors = new Float32Array(pos.count * 3);
-  const dark = new THREE.Color("#1f4214"), light = new THREE.Color("#5f8a26"), pale = new THREE.Color("#8fae4a");
-  const valleyLo = new THREE.Color("#2c5a2a"), valleyHi = new THREE.Color("#6b9a4a");
-  const rockDark = new THREE.Color("#2b3240"), rockLight = new THREE.Color("#55606f");
+  const g0 = new THREE.Color("#1b3317"), g1 = new THREE.Color("#33522a"), g2 = new THREE.Color("#5e7d3c");
+  const v0 = new THREE.Color("#2f5a35"), v1 = new THREE.Color("#6a9a55");
+  const r0 = new THREE.Color("#162430"), r1 = new THREE.Color("#2f4352");
   const c = new THREE.Color(), r = new THREE.Color();
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-    const n = noise2(x, z) * 0.5 + 0.5;
-    if (y > -20) { c.copy(dark).lerp(light, n); if (n > 0.8) c.lerp(pale, (n - 0.8) * 3); }
-    else c.copy(valleyLo).lerp(valleyHi, n);
-    // steep faces become rock: the cliff rim reads as stone, not stretched grass
+    const n = fbm(x * 0.02, z * 0.02);
+    if (y > -12) {
+      c.copy(g0).lerp(g1, THREE.MathUtils.smoothstep(n, 0.3, 0.6));
+      c.lerp(g2, THREE.MathUtils.smoothstep(n, 0.62, 0.8) * 0.8);
+    } else c.copy(v0).lerp(v1, n);
     const steep = 1 - THREE.MathUtils.smoothstep(nrm.getY(i), 0.55, 0.85);
-    r.copy(rockDark).lerp(rockLight, noise2(x * 3.1, y * 2.3) * 0.5 + 0.5);
+    r.copy(r0).lerp(r1, fbm(x * 0.08, y * 0.12));
     c.lerp(r, steep);
     colors.set([c.r, c.g, c.b], i * 3);
   }
@@ -35,14 +57,14 @@ export function buildTerrain(segments = 300): THREE.Object3D {
 
   const water = new THREE.Mesh(
     new THREE.PlaneGeometry(1800, 1800).rotateX(-Math.PI / 2),
-    new THREE.MeshStandardMaterial({ color: "#8fc0e8", metalness: 0.6, roughness: 0.15 }),
+    new THREE.MeshLambertMaterial({ color: "#7fb4d8", emissive: new THREE.Color("#3d6f96"), emissiveIntensity: 0.6 }),
   );
   water.position.y = WATER_LEVEL;
   group.add(water);
 
-  group.add(buildMountains());
+  group.add(buildMountains(560, 860, 0.0042, 0.75, 7), buildMountains(950, 1500, 0.0028, 1.35, 3));
 
-  const rock = new THREE.MeshLambertMaterial({ color: "#7f8590" });
+  const rock = new THREE.MeshLambertMaterial({ color: "#3a4c5c" });
   for (const p of PILLARS) {
     const base = terrainHeight(p.x, p.z) - 8;
     const h = p.top - base;
@@ -53,23 +75,31 @@ export function buildTerrain(segments = 300): THREE.Object3D {
   return group;
 }
 
-/** A jagged ring of distant ridges; fog turns them into pale blue layers. */
-function buildMountains(): THREE.Mesh {
-  const seg = 160;
+/** A ring of ridged mountains between radius r0 and r1, lit by the sun so ridges get a light and a shadow side. */
+function buildMountains(r0: number, r1: number, freq: number, heightScale: number, seed: number): THREE.Mesh {
+  const segA = 280, segR = 14;
   const pos: number[] = [], col: number[] = [], idx: number[] = [];
-  const base = new THREE.Color("#4d6b4a"), rock = new THREE.Color("#6f7f96"), snow = new THREE.Color("#e8eef8");
-  for (let i = 0; i <= seg; i++) {
-    const a = (i / seg) * Math.PI * 2;
-    const ridge = 90 + 110 * Math.abs(Math.sin(a * 3.1) * Math.cos(a * 1.7)) + 40 * Math.abs(Math.sin(a * 11.3));
-    const rows: [number, number, THREE.Color][] = [
-      [860, -75, base], [1000, ridge * 0.55, rock], [1080, ridge, ridge > 170 ? snow : rock], [1250, -75, rock],
-    ];
-    for (const [r, y, cc] of rows) { pos.push(Math.cos(a) * r, y, Math.sin(a) * r); col.push(cc.r, cc.g, cc.b); }
+  const grass = new THREE.Color("#3f6a45"), rock = new THREE.Color("#5c6f86"), snow = new THREE.Color("#eef3f8");
+  const c = new THREE.Color();
+  for (let i = 0; i <= segA; i++) {
+    const a = (i / segA) * Math.PI * 2;
+    for (let j = 0; j <= segR; j++) {
+      const t = j / segR, rr = r0 + (r1 - r0) * t;
+      const x = Math.cos(a) * rr, z = Math.sin(a) * rr;
+      const profile = Math.sin(Math.PI * t) ** 0.7;
+      const h = profile * (60 + 330 * ridged(x * freq + seed, z * freq - seed)) * heightScale;
+      const y = VALLEY_FLOOR - 4 + h;
+      pos.push(x, y, z);
+      c.copy(grass).lerp(rock, THREE.MathUtils.smoothstep(h, 30, 120));
+      if (h > 260 * heightScale) c.lerp(snow, THREE.MathUtils.smoothstep(h, 260 * heightScale, 320 * heightScale));
+      col.push(c.r, c.g, c.b);
+    }
   }
-  for (let i = 0; i < seg; i++) {
-    for (let j = 0; j < 3; j++) {
-      const a = i * 4 + j, b = a + 4;
-      idx.push(a, a + 1, b, a + 1, b + 1, b);
+  const row = segR + 1;
+  for (let i = 0; i < segA; i++) {
+    for (let j = 0; j < segR; j++) {
+      const a = i * row + j, b = a + row;
+      idx.push(a, b, a + 1, a + 1, b, b + 1);
     }
   }
   const geo = new THREE.BufferGeometry();
@@ -77,13 +107,16 @@ function buildMountains(): THREE.Mesh {
   geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
   geo.setIndex(idx);
   geo.computeVertexNormals();
-  return new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }));
+  return new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
 }
 
-/** Mirror-like monoliths. `envMap` should be a capture of sky + clouds. */
-export function buildMonoliths(envMap: THREE.Texture): THREE.Object3D {
+/**
+ * Monoliths: sky-colored, featureless, defined only by clean edges and the
+ * value step between the sunlit face and the shaded face.
+ */
+export function buildMonoliths(): THREE.Object3D {
   const group = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: "#c9d6e4", metalness: 0.55, roughness: 0.22, envMap, envMapIntensity: 0.8 });
+  const mat = new THREE.MeshLambertMaterial({ color: "#3d74bd" });
   for (const m of MONOLITHS) {
     const base = terrainHeight(m.x, m.z) - 10;
     const h = m.top - base;
@@ -91,12 +124,11 @@ export function buildMonoliths(envMap: THREE.Texture): THREE.Object3D {
     box.position.set(m.x, base + h / 2, m.z);
     group.add(box);
   }
-  for (const s of SPANS) {
-    const a = MONOLITHS[s.a], b = MONOLITHS[s.b];
-    const dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz);
-    const slab = new THREE.Mesh(new THREE.BoxGeometry(s.width, s.thick, len + 40), mat);
-    slab.position.set((a.x + b.x) / 2, s.y, (a.z + b.z) / 2);
-    slab.rotation.y = Math.atan2(dx, dz);
+  const slabMat = new THREE.MeshLambertMaterial({ color: "#4a80c6" });
+  for (const s of SLABS) {
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(s.w, s.h, s.len), slabMat);
+    slab.position.set(s.x, s.y, s.z);
+    slab.rotation.set(s.pitch, s.yaw, 0, "YXZ");
     group.add(slab);
   }
   return group;
