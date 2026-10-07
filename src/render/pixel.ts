@@ -75,6 +75,10 @@ export function createPixelPipeline(renderer: THREE.WebGLRenderer) {
             float dist = linearDepth(texture2D(tDepth, vUv).r);
             int r = dist < 30.0 ? 3 : dist < 140.0 ? 2 : 1;
             c = kuwahara(vUv, r);
+            // keep isolated bright specks (flowers, glints) that the cluster filter would average away
+            vec3 center = texture2D(tScene, vUv).rgb;
+            float lc = dot(center, vec3(0.2126, 0.7152, 0.0722)), lk = dot(c, vec3(0.2126, 0.7152, 0.0722));
+            if (lc > lk * 1.8 + 0.15) c = center;
           } else {
             c = texture2D(tScene, vUv).rgb;
           }

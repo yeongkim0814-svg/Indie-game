@@ -17,8 +17,9 @@ export function terrainHeight(x: number, z: number): number {
   const k = Math.hypot(ex, ez) + 0.07 * Math.sin(a * 5 + 1.3) + 0.04 * Math.sin(a * 13);
   const t = smooth(1, 1.16, k);
   if (t <= 0) return plateau;
-  const river = 70 + 140 * Math.sin(z * 0.004) + 40 * Math.sin(z * 0.011);
-  const carve = 5 * (1 - smooth(10, 30, Math.abs(x - river)));
+  // river crosses the rim view (+x) as a band at mid distance
+  const river = 300 + 70 * Math.sin(z * 0.006) + 30 * Math.sin(z * 0.017);
+  const carve = 6 * (1 - smooth(14, 34, Math.abs(x - river)));
   // rolling ridges inside the valley give layered silhouettes at mid distance
   const ridge = Math.max(0, Math.sin(x * 0.012 + Math.cos(z * 0.009) * 2) * Math.sin(z * 0.01 + 0.7));
   const hills = Math.pow(ridge, 1.5) * 55 * smooth(130, 220, Math.hypot(x, z + 20));

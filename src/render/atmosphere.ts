@@ -1,7 +1,7 @@
 import * as THREE from "three";
 
-/** Direction toward the sun: high, behind-left of the default view so clouds face us lit. */
-export const SUN_DIR = new THREE.Vector3(-0.45, 0.72, 0.52).normalize();
+/** Direction toward the sun: high and to the right of the rim view (+x), so ridges and monoliths split into lit and shaded faces. */
+export const SUN_DIR = new THREE.Vector3(0.2, 0.62, 0.76).normalize();
 
 export const SKY = {
   zenith: new THREE.Color("#2a68b8"),
@@ -24,8 +24,8 @@ float terrainHeight(vec2 p) {
   float k = length(e) + 0.07 * sin(a * 5.0 + 1.3) + 0.04 * sin(a * 13.0);
   float t = smoothstep(1.0, 1.16, k);
   if (t <= 0.0) return plateau;
-  float river = 70.0 + 140.0 * sin(p.y * 0.004) + 40.0 * sin(p.y * 0.011);
-  float carve = 5.0 * (1.0 - smoothstep(10.0, 30.0, abs(p.x - river)));
+  float river = 300.0 + 70.0 * sin(p.y * 0.006) + 30.0 * sin(p.y * 0.017);
+  float carve = 6.0 * (1.0 - smoothstep(14.0, 34.0, abs(p.x - river)));
   float ridge = max(0.0, sin(p.x * 0.012 + cos(p.y * 0.009) * 2.0) * sin(p.y * 0.01 + 0.7));
   float hills = pow(ridge, 1.5) * 55.0 * smoothstep(130.0, 220.0, length(vec2(p.x, p.y + 20.0)));
   float valley = -38.0 + 3.0 * sin(p.x * 0.02) * cos(p.y * 0.017) + hills - carve;

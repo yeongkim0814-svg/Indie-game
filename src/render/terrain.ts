@@ -37,7 +37,7 @@ export function buildTerrain(segments = 300): THREE.Object3D {
   const nrm = geo.attributes.normal;
   const colors = new Float32Array(pos.count * 3);
   const g0 = new THREE.Color("#1b3317"), g1 = new THREE.Color("#33522a"), g2 = new THREE.Color("#5e7d3c");
-  const v0 = new THREE.Color("#2f5a35"), v1 = new THREE.Color("#6a9a55");
+  const v0 = new THREE.Color("#5f9460"), v1 = new THREE.Color("#b2d488");
   const r0 = new THREE.Color("#162430"), r1 = new THREE.Color("#2f4352");
   const c = new THREE.Color(), r = new THREE.Color();
   for (let i = 0; i < pos.count; i++) {
@@ -57,7 +57,8 @@ export function buildTerrain(segments = 300): THREE.Object3D {
 
   const water = new THREE.Mesh(
     new THREE.PlaneGeometry(1800, 1800).rotateX(-Math.PI / 2),
-    new THREE.MeshLambertMaterial({ color: "#7fb4d8", emissive: new THREE.Color("#3d6f96"), emissiveIntensity: 0.6 }),
+    // unlit: the river reads as a bright band of reflected sky
+    new THREE.MeshBasicMaterial({ color: new THREE.Color("#d6ecf7").multiplyScalar(1.15) }),
   );
   water.position.y = WATER_LEVEL;
   group.add(water);
