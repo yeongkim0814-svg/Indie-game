@@ -26,24 +26,11 @@ const sim = new GameSim();
 const input = createInput(document.body);
 const updateHud = createHud(document.body);
 
-// ---- character: capsule body + oversized launcher that points along the aim ----
+// ---- character: mesh with integrated launcher ----
 const player = new THREE.Group();
 const characterMesh = createCharacterMesh();
-const launcherPivot = new THREE.Group();
-launcherPivot.position.set(0, 1.3, 0);
-const launcher = new THREE.Mesh(
-  new THREE.BoxGeometry(0.28, 0.34, 1.7),
-  new THREE.MeshLambertMaterial({ color: "#3b4a6b", flatShading: true }),
-);
-launcher.position.set(0.3, 0, 0.6);
-const glow = new THREE.Mesh(
-  new THREE.BoxGeometry(0.3, 0.06, 1.2),
-  new THREE.MeshBasicMaterial({ color: "#69e3c0" }),
-);
-glow.position.set(0.3, 0.19, 0.6);
-launcherPivot.add(launcher, glow);
 player.add(characterMesh);
-scene.add(player, launcherPivot);
+scene.add(player);
 
 // ---- crates, slug pool ----
 const crateMeshes = sim.crates.map(() => {
@@ -119,11 +106,6 @@ function frame(now: number) {
   // lean into velocity change (cloth/recoil read)
   tilt += ((sim.player.grounded ? 0 : THREE.MathUtils.clamp(sim.player.vel.y * 0.04, -0.5, 0.5)) - tilt) * 0.2;
   characterMesh.rotation.x = -tilt * 0.5;
-  launcherPivot.position.set(p.x, p.y + 1.3, p.z);
-  launcherPivot.lookAt(p.x + aimDir.x * 10, p.y + 1.3 + aimDir.y * 10, p.z + aimDir.z * 10);
-  (glow.material as THREE.MeshBasicMaterial).color.setHSL(0.45 - 0.45 * (1 - sim.energy.fraction) * 0.9, 0.7, 0.35 + 0.35 * sim.energy.fraction);
-  const kick = sim.charging ? sim.charge * 0.12 : 0;
-  launcher.position.z = 0.6 - kick;
 
   sim.crates.forEach((c, i) => crateMeshes[i].position.set(c.pos.x, c.pos.y + 0.55, c.pos.z));
 
