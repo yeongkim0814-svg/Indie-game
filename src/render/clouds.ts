@@ -99,7 +99,7 @@ export function buildClouds(): THREE.Mesh {
       attribute vec4 aCenter;
       attribute float aShade;
       varying vec2 vUv;
-      varying vec3 vView;
+      varying vec3 vView, vCenter;
       varying float vR, vShade, vSeed;
       void main() {
         vec4 mv = viewMatrix * vec4(aCenter.xyz, 1.0);
@@ -107,6 +107,7 @@ export function buildClouds(): THREE.Mesh {
         vUv = position.xy;
         vView = mv.xyz;
         vR = aCenter.w;
+        vCenter = aCenter.xyz;
         vShade = aShade;
         vSeed = fract(sin(dot(aCenter.xz, vec2(12.9898, 78.233))) * 43758.5453);
         gl_Position = projectionMatrix * mv;
@@ -116,26 +117,46 @@ export function buildClouds(): THREE.Mesh {
       uniform vec3 uSunDir, uHorizon, uLit, uShadow;
       uniform float uFog;
       varying vec2 vUv;
-      varying vec3 vView;
+      varying vec3 vView, vCenter;
       varying float vR, vShade, vSeed;
       ${GLSL_FOG}
-      float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-      float noise(vec2 p) {
-        vec2 i = floor(p), f = fract(p);
-        vec2 u = f * f * (3.0 - 2.0 * f);
-        return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+      float hash3(vec3 p) {
+        p = fract(p * 0.1031);
+        p += dot(p, p.zyx + 31.32);
+        return fract((p.x + p.y) * p.z);
+      }
+      float noise3(vec3 p) {
+        vec3 i = floor(p), f = fract(p);
+        vec3 u = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(mix(hash3(i), hash3(i + vec3(1, 0, 0)), u.x), mix(hash3(i + vec3(0, 1, 0)), hash3(i + vec3(1, 1, 0)), u.x), u.y),
+          mix(mix(hash3(i + vec3(0, 0, 1)), hash3(i + vec3(1, 0, 1)), u.x), mix(hash3(i + vec3(0, 1, 1)), hash3(i + vec3(1, 1, 1)), u.x), u.y),
+          u.z);
       }
       void main() {
+        // camera basis in world space: every pattern below is a function of world-space points,
+        // so rotating the camera in place does not make the texture slide
+        vec3 camRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
+        vec3 camUp = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+        vec3 camBack = vec3(viewMatrix[0][2], viewMatrix[1][2], viewMatrix[2][2]);
         vec2 p = vUv;
-        float bumps = noise(p * 2.6 + vSeed * 17.0) * 0.5 + noise(p * 6.0 - vSeed * 9.0) * 0.3 + noise(p * 13.0 + vSeed * 5.0) * 0.2;
+        float pz = sqrt(max(1.0 - dot(p, p), 0.0));
+        vec3 wdir = normalize(camRight * p.x + camUp * p.y + camBack * pz + 1e-5);
+        vec3 sd = vec3(vSeed * 17.0, vSeed * 9.0, vSeed * 5.0);
+        float bumps = noise3(wdir * 2.6 + sd) * 0.5 + noise3(wdir * 6.0 - sd.yzx) * 0.3 + noise3(wdir * 13.0 + sd.zxy) * 0.2;
         float d = length(p) + (bumps - 0.45) * 0.45;
+        if (d > 1.0) discard;
+        float z = sqrt(max(1.0 - d * d, 0.0));
+        vec3 n0 = normalize(vec3(p, z));
+        vec3 wn = camRight * n0.x + camUp * n0.y + camBack * n0.z;
+        vec3 sp = vCenter + wn * vR;
         // ragged fringe: the outer band dissolves into scattered specks instead of a hard round edge
         float fringe = smoothstep(0.82, 1.0, d);
-        if (d > 1.0 || hash(floor(gl_FragCoord.xy) + vSeed * 91.0) < fringe * 0.7) discard;
-        float z = sqrt(max(1.0 - d * d, 0.0));
+        if (hash3(floor(sp / (vR * 0.08)) + sd) < fringe * 0.7) discard;
         // lumpy normal: breaks smooth sphere shading into cauliflower clusters
-        vec2 lump = vec2(noise(p * 4.0 + vSeed * 31.0), noise(p * 4.0 - vSeed * 23.0)) - 0.5;
-        vec3 n = normalize(vec3(p + lump * 0.55, z));
+        vec3 lump = vec3(noise3(wn * 4.0 + sd * 1.8), noise3(wn * 4.0 - sd.yzx * 1.3), noise3(wn * 4.0 + sd.zxy * 2.1)) - 0.5;
+        vec3 wnl = normalize(wn + lump * 0.55);
+        vec3 n = vec3(dot(wnl, camRight), dot(wnl, camUp), dot(wnl, camBack));
         vec3 sunView = normalize((viewMatrix * vec4(uSunDir, 0.0)).xyz);
         // mostly white; blue shadow gathers on the underside and the side away from the sun
         // shade by height in the whole cloud first, puff normal only a little:
@@ -143,9 +164,8 @@ export function buildClouds(): THREE.Mesh {
         float wrap = clamp(dot(n, sunView) * 0.5 + 0.7, 0.0, 1.0);
         float height = smoothstep(0.0, 0.7, vShade);
         float under = smoothstep(0.2, -0.8, n.y) * (1.0 - height);
-        // folds: shade pattern continuous across puffs (view-space noise), so the mass reads as one volume
-        vec2 vp2 = vView.xy / max(-vView.z, 1.0) * 60.0;
-        float fold = noise(vp2 * 0.45) * 0.65 + noise(vp2 * 1.2) * 0.35;
+        // folds: shade pattern continuous across puffs (world-space noise), so the mass reads as one volume
+        float fold = noise3(sp * 0.035) * 0.65 + noise3(sp * 0.09) * 0.35;
         float lit = mix(0.5, 1.0, height) * mix(1.0, wrap, 0.25) * (1.0 - 0.35 * under) * mix(0.72, 1.06, smoothstep(0.3, 0.7, fold));
         vec3 col = mix(uShadow, uLit, smoothstep(0.4, 1.0, lit));
         // silver lining where the sun sits behind the puff
