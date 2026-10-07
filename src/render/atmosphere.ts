@@ -11,7 +11,7 @@ export const SKY = {
 };
 
 /** Aerial perspective: color = obj·e^(−βd) + horizon·(1−e^(−βd)). */
-export const FOG_DENSITY = 0.0022;
+export const FOG_DENSITY = 0.0015;
 /** Clouds are much larger and farther; they get a lighter β so they keep their shape. */
 export const CLOUD_FOG_DENSITY = 0.0005;
 

@@ -106,8 +106,8 @@ float mn(vec2 p) {
   float grassy = smoothstep(0.0, 0.04, vc.g - max(vc.r, vc.b) * 1.05) * step(-12.0, vWPos.y);
   vec2 q = vWPos.xz;
   // big patches + turf octaves at ~0.3-0.8 m so every low-res pixel gets its own tone
-  float n = mn(q * 0.07) * 0.34 + mn(q * 0.23 + 7.1) * 0.22 + mn(q * 0.9 - 3.3) * 0.14 + mn(q * 1.9 + 1.7) * 0.15 + mn(q * 3.7 - 8.2) * 0.15;
-  n = clamp((n - 0.5) * 1.5 + 0.42, 0.0, 1.0);
+  float n = mn(q * 0.07) * 0.2 + mn(q * 0.23 + 7.1) * 0.2 + mn(q * 0.9 - 3.3) * 0.2 + mn(q * 1.9 + 1.7) * 0.2 + mn(q * 3.7 - 8.2) * 0.2;
+  n = clamp((n - 0.5) * 2.1 + 0.36, 0.0, 1.0);
   // ramp (linear of #192925 #273e2b #395330 #537039 #8a9f48): teal shade -> olive highlight only in sun patches
   vec3 c0 = vec3(0.0097, 0.0222, 0.0185), c1 = vec3(0.0203, 0.0482, 0.0242), c2 = vec3(0.0409, 0.0865, 0.0296), c3 = vec3(0.0865, 0.162, 0.0409), c4 = vec3(0.254, 0.347, 0.0648);
   vec3 g = mix(c0, c1, smoothstep(0.1, 0.3, n));
@@ -115,6 +115,7 @@ float mn(vec2 p) {
   g = mix(g, c3, smoothstep(0.5, 0.72, n));
   float sunP = smoothstep(0.55, 0.8, mn(q * 0.11 + 21.0));
   g = mix(g, c4, smoothstep(0.7, 0.95, n) * sunP);
+  g *= 0.8;
   // rock is exposed by shape: steep faces are rock with a thin turf lip above them (narrow smoothstep)
   float cliff = smoothstep(0.2, 0.26, vSlope);
   // near a convex edge (big drop within ~4 m) a few small stones break through the turf
@@ -146,11 +147,12 @@ float mn(vec2 p) {
   // valley: fields/terraces squeezed into horizontal bands: lit green tops, blue shaded flanks
   float vmask = 1.0 - step(-12.0, vWPos.y);
   {
-    float fld = mn(vec2(q.x * 0.16, q.y * 0.012)) * 0.6 + mn(vec2(q.x * 0.5 + 3.0, q.y * 0.05)) * 0.25 + mn(vec2(q.x * 1.3, q.y * 0.2)) * 0.15;
+    float fld = mn(vec2(q.x * 0.2, q.y * 0.01)) * 0.3 + mn(vec2(q.x * 0.7 + 3.0, q.y * 0.03)) * 0.35 + mn(vec2(q.x * 2.2, q.y * 0.1)) * 0.35;
+    fld = clamp((fld - 0.5) * 2.4 + 0.5, 0.0, 1.0);
     float lit = dot(normalize(vWN), vec3(0.3, 0.7, -0.65)) / 0.75;
     float s = lit * 1.2 + (fld - 0.5) * 1.1 - 0.35;
-    vec3 vb = mix(vec3(0.012, 0.05, 0.15), vec3(0.05, 0.16, 0.31), smoothstep(0.1, 0.5, fld));
-    vec3 vg = mix(vec3(0.07, 0.2, 0.09), vec3(0.4, 0.52, 0.2), smoothstep(0.45, 0.75, fld));
+    vec3 vb = mix(vec3(0.004, 0.02, 0.09), vec3(0.05, 0.16, 0.34), smoothstep(0.1, 0.5, fld));
+    vec3 vg = mix(vec3(0.03, 0.1, 0.06), vec3(0.45, 0.58, 0.22), smoothstep(0.45, 0.75, fld));
     vec3 vv = mix(vb, vg, smoothstep(0.35, 0.6, s));
     g = mix(g, vv, vmask * (1.0 - cliff));
     grassy = max(grassy, vmask * (1.0 - cliff));

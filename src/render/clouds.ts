@@ -6,7 +6,12 @@ function rng(seed: number) {
   return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
 }
 
-interface Puff { x: number; y: number; z: number; r: number; shade: number }
+/** shade: height within the cloud (0 base … 1 top); side: −1 far from the sun … +1 toward the sun, within its cloud mass */
+interface Puff { x: number; y: number; z: number; r: number; shade: number; side: number }
+
+// horizontal direction toward the sun, used to give each cloud mass a lit flank and a shaded flank
+const SUN_H = new THREE.Vector2(SUN_DIR.x, SUN_DIR.z).normalize();
+const sideOf = (dx: number, dz: number, half: number) => Math.max(-1, Math.min(1, (dx * SUN_H.x + dz * SUN_H.y) / half));
 
 /** Flat sea of cloud near the horizon. */
 function stratus(out: Puff[], cx: number, cz: number, base: number, width: number, rand: () => number) {
@@ -14,7 +19,8 @@ function stratus(out: Puff[], cx: number, cz: number, base: number, width: numbe
   for (let i = 0; i < n; i++) {
     const a = rand() * Math.PI * 2, d = Math.sqrt(rand()) * width * 0.5;
     const r = 18 + rand() * 26;
-    out.push({ x: cx + Math.cos(a) * d, y: base + rand() * 12, z: cz + Math.sin(a) * d * 0.5, r, shade: 0.35 + rand() * 0.3 });
+    const ox = Math.cos(a) * d, oz = Math.sin(a) * d * 0.5;
+    out.push({ x: cx + ox, y: base + rand() * 12, z: cz + oz, r, shade: 0.35 + rand() * 0.3, side: sideOf(ox, oz, width * 0.5) });
   }
 }
 
@@ -22,7 +28,7 @@ function stratus(out: Puff[], cx: number, cz: number, base: number, width: numbe
  * One slice of a continuous cloud bank: wide at the base, narrowing upward, and
  * wider than the spacing between slices so neighbours merge into one wall.
  */
-function bankSlice(out: Puff[], cx: number, cz: number, tx: number, tz: number, base: number, width: number, height: number, rand: () => number) {
+function bankSlice(out: Puff[], cx: number, cz: number, tx: number, tz: number, base: number, width: number, height: number, flank: number, rand: () => number) {
   const n = Math.round(30 + (width * height) / 380);
   for (let i = 0; i < n; i++) {
     const t = Math.pow(rand(), 1.15);
@@ -30,14 +36,17 @@ function bankSlice(out: Puff[], cx: number, cz: number, tx: number, tz: number, 
     // spread mostly along the bank (tangent), only a little in depth
     const along = (rand() - 0.5) * spread, depth = (rand() - 0.5) * spread * 0.45;
     const r = width * 0.16 * (0.6 + rand() * 0.8) * (1 - t * 0.35);
-    out.push({ x: cx + tx * along - tz * depth, y: base + t * height, z: cz + tz * along + tx * depth, r, shade: t });
+    const ox = tx * along - tz * depth, oz = tz * along + tx * depth;
+    // flank: which side of its tower this slice is on (the whole flank lights up), plus a little local variation
+    const side = Math.max(-1, Math.min(1, flank * 0.75 + sideOf(ox, oz, width * 0.5) * 0.35));
+    out.push({ x: cx + ox, y: base + t * height, z: cz + oz, r, shade: t, side });
     // crown lumps on the upper part
     if (t > 0.55 && rand() < 0.35) {
       for (let k = 0; k < 3; k++) {
         const th = rand() * Math.PI * 2, ph = rand() * 1.1;
         out.push({
           x: cx + tx * along - tz * depth + Math.cos(th) * Math.sin(ph) * r, y: base + t * height + Math.cos(ph) * r * 0.9,
-          z: cz + tz * along + tx * depth + Math.sin(th) * Math.sin(ph) * r, r: r * (0.3 + rand() * 0.25), shade: Math.min(1, t + 0.1),
+          z: cz + tz * along + tx * depth + Math.sin(th) * Math.sin(ph) * r, r: r * (0.3 + rand() * 0.25), shade: Math.min(1, t + 0.1), side,
         });
       }
     }
@@ -52,7 +61,13 @@ function bank(out: Puff[], ox: number, oz: number, radius: number, a0: number, a
     const rr = radius * (1 + (rand() - 0.5) * 0.12);
     const cx = ox + Math.cos(a) * rr, cz = oz + Math.sin(a) * rr;
     const h = profile(u) * (0.85 + rand() * 0.3);
-    bankSlice(out, cx, cz, -Math.sin(a), Math.cos(a), base + (rand() - 0.5) * 10, step * 2.6, h, rand);
+    // Height rising along the bank means this slice is on the flank of a tower that faces back along
+    // the arc. Map that to lit (+1) or shaded (−1) by which way along the arc points toward the sun.
+    const du = 0.01, dh = (profile(Math.min(1, u + du)) - profile(Math.max(0, u - du))) / (2 * du);
+    const tx = -Math.sin(a), tz = Math.cos(a);
+    const towardSun = -(tx * SUN_H.x + tz * SUN_H.y) * Math.sign(a1 - a0);
+    const flank = Math.max(-1, Math.min(1, (dh / 600) * Math.sign(towardSun || 1)));
+    bankSlice(out, cx, cz, tx, tz, base + (rand() - 0.5) * 10, step * 2.6, h, flank, rand);
   }
 }
 
@@ -81,10 +96,10 @@ export function buildClouds(): THREE.Mesh {
   geo.index = quad.index;
   geo.setAttribute("position", quad.getAttribute("position"));
   const center = new Float32Array(puffs.length * 4);
-  const shade = new Float32Array(puffs.length);
-  puffs.forEach((p, i) => { center.set([p.x, p.y, p.z, p.r], i * 4); shade[i] = p.shade; });
+  const shade = new Float32Array(puffs.length * 2);
+  puffs.forEach((p, i) => { center.set([p.x, p.y, p.z, p.r], i * 4); shade[i * 2] = p.shade; shade[i * 2 + 1] = p.side; });
   geo.setAttribute("aCenter", new THREE.InstancedBufferAttribute(center, 4));
-  geo.setAttribute("aShade", new THREE.InstancedBufferAttribute(shade, 1));
+  geo.setAttribute("aShade", new THREE.InstancedBufferAttribute(shade, 2));
   geo.instanceCount = puffs.length;
 
   const mat = new THREE.ShaderMaterial({
@@ -98,10 +113,10 @@ export function buildClouds(): THREE.Mesh {
     },
     vertexShader: /* glsl */ `
       attribute vec4 aCenter;
-      attribute float aShade;
+      attribute vec2 aShade;
       varying vec2 vUv;
       varying vec3 vView, vCenter;
-      varying float vR, vShade, vSeed;
+      varying float vR, vShade, vSide, vSeed;
       void main() {
         vec4 mv = viewMatrix * vec4(aCenter.xyz, 1.0);
         mv.xy += position.xy * aCenter.w;
@@ -109,7 +124,8 @@ export function buildClouds(): THREE.Mesh {
         vView = mv.xyz;
         vR = aCenter.w;
         vCenter = aCenter.xyz;
-        vShade = aShade;
+        vShade = aShade.x;
+        vSide = aShade.y;
         vSeed = fract(sin(dot(aCenter.xz, vec2(12.9898, 78.233))) * 43758.5453);
         gl_Position = projectionMatrix * mv;
       }`,
@@ -119,7 +135,7 @@ export function buildClouds(): THREE.Mesh {
       uniform float uFog;
       varying vec2 vUv;
       varying vec3 vView, vCenter;
-      varying float vR, vShade, vSeed;
+      varying float vR, vShade, vSide, vSeed;
       ${GLSL_FOG}
       float hash3(vec3 p) {
         p = fract(p * 0.1031);
@@ -157,16 +173,15 @@ export function buildClouds(): THREE.Mesh {
         // lumpy normal: breaks smooth sphere shading into cauliflower clusters
         vec3 lump = vec3(noise3(wn * 4.0 + sd * 1.8), noise3(wn * 4.0 - sd.yzx * 1.3), noise3(wn * 4.0 + sd.zxy * 2.1)) - 0.5;
         vec3 wnl = normalize(wn + lump * 0.55);
-        // sun-driven shading in WORLD space: puff normal vs sun, plus a coarse "mass" sawtooth along the
-        // sun axis so each lobe of the bank is bright on its sun side and blue on the far side
+        // Sun-driven shading in WORLD space. The coarse term comes from where the puff sits inside its
+        // cloud mass (vSide: toward/away from the sun), so whole flanks light up or fall into blue shade;
+        // the puff normal and folds only add texture on top.
         float ndl = dot(wnl, uSunDir);
-        float wrap = clamp(ndl * 0.75 + 0.5, 0.0, 1.0);
-        float ph = dot(sp, uSunDir) / 300.0 + noise3(sp * 0.006) * 0.7;
-        float saw = fract(ph);
-        float mass = 1.0 - smoothstep(0.35, 0.8, saw);
+        float wrap = clamp(ndl * 0.6 + 0.5, 0.0, 1.0);
+        float mass = smoothstep(-0.55, 0.45, vSide) * 0.8 + smoothstep(0.2, 1.0, vShade) * 0.2;
         float fold = noise3(sp * 0.05) * 0.6 + noise3(sp * 0.13) * 0.4;
-        float lit = clamp(mix(wrap, mass, 0.5) + (fold - 0.5) * 0.3, 0.0, 1.0);
-        vec3 col = mix(uShadow, uLit, smoothstep(0.5, 1.0, lit));
+        float lit = clamp(mass * 0.7 + wrap * 0.3 + (fold - 0.5) * 0.18, 0.0, 1.0);
+        vec3 col = mix(uShadow, uLit, smoothstep(0.35, 0.85, lit));
         col = mix(col, uMid, (1.0 - abs(lit - 0.5) * 2.0) * 0.35);
         vec3 n = vec3(0.0, 0.0, 1.0);
         // silver lining where the sun sits behind the puff
