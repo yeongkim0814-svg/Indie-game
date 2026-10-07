@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RAID, Raid, idleRaidInput, type RaidInput } from "./raid";
+import { makeItem } from "./items";
 
 const DT = 1 / 120;
 const run = (r: Raid, secs: number, input: RaidInput = idleRaidInput()) => {
@@ -27,10 +28,16 @@ describe("movement (F = M·a)", () => {
 
   it("a heavier pack accelerates more slowly", () => {
     const light = new Raid(ROOM), heavy = new Raid(ROOM);
-    heavy.player.carried = 5;
-    run(light, 0.05, move(1, 0));
-    run(heavy, 0.05, move(1, 0));
-    expect(heavy.player.vel.x).toBeLessThan(light.player.vel.x * 0.85);
+    for (let i = 0; i < 4; i++) heavy.backpack.autoPlace(makeItem("ore"));
+    const N = 6;
+    for (let i = 0; i < N; i++) { light.step(DT, move(1, 0)); heavy.step(DT, move(1, 0)); }
+    // Euler form of a = (F − c·v)/M: v_n = v_max·(1 − (1 − c·dt/M)^n). Same top speed, slower approach.
+    const { drive, drag } = RAID.player;
+    const v = (M: number) => (drive / drag) * (1 - Math.pow(1 - (drag * DT) / M, N));
+    expect(heavy.playerMass).toBe(RAID.player.bodyMass + 12);
+    expect(light.player.vel.x).toBeCloseTo(v(light.playerMass), 6);
+    expect(heavy.player.vel.x).toBeCloseTo(v(heavy.playerMass), 6);
+    expect(heavy.player.vel.x).toBeLessThan(light.player.vel.x);
   });
 
   it("rock walls block the player", () => {
@@ -85,10 +92,30 @@ describe("shooting (momentum transfer)", () => {
 });
 
 describe("raid outcome", () => {
-  it("picks up samples by walking over them", () => {
-    const r = new Raid(["########", "#P..s..#", "########"]);
+  it("picks up samples into the backpack grid", () => {
+    const r = new Raid(["########", "#P..o..#", "########"]);
     run(r, 2, move(1, 0));
-    expect(r.player.carried).toBe(1);
+    expect(r.backpack.items.map((i) => i.kind)).toEqual(["ore"]);
+    expect(r.playerMass).toBe(RAID.player.bodyMass + 3);
+  });
+
+  it("a full backpack leaves the sample on the ground", () => {
+    const r = new Raid(["########", "#P..b..#", "########"]);
+    for (let i = 0; i < 15; i++) r.backpack.autoPlace(makeItem("quartz"));
+    run(r, 2, move(1, 0));
+    expect(r.samples[0].taken).toBe(false);
+    expect(r.events.some((e) => e.kind === "full")).toBe(true);
+  });
+
+  it("dropping an item puts it back on the ground and lightens the pack", () => {
+    const r = new Raid(ROOM);
+    const ore = makeItem("ore");
+    r.backpack.autoPlace(ore);
+    expect(r.dropItem(ore)).toBe(true);
+    expect(r.playerMass).toBe(RAID.player.bodyMass);
+    expect(r.samples.at(-1)?.item).toBe(ore);
+    run(r, 0.5);
+    expect(r.backpack.items).toHaveLength(0); // standing on it does not re-grab it
   });
 
   it("extracts after holding the zone, keeping carried samples", () => {
@@ -97,7 +124,10 @@ describe("raid outcome", () => {
     run(r, 0.25, idleRaidInput());
     run(r, RAID.extractHold + 1, move(0, 0));
     expect(r.state).toBe("extracted");
-    expect(r.result()).toEqual({ state: "extracted", samples: 1 });
+    const res = r.result();
+    expect(res.state).toBe("extracted");
+    expect(res.items.map((i) => i.kind)).toEqual(["quartz"]);
+    expect(res.value).toBe(10);
   });
 
   it("leaving the zone resets the extraction timer", () => {
@@ -108,11 +138,15 @@ describe("raid outcome", () => {
     expect(r.state).toBe("running");
   });
 
-  it("staying out past sunset loses the raid and its samples", () => {
+  it("staying out past sunset loses the backpack but keeps the notebook", () => {
     const r = new Raid(ROOM);
-    r.player.carried = 3;
+    r.backpack.autoPlace(makeItem("ore"));
+    const kept = makeItem("quartz");
+    r.notebook.autoPlace(kept);
     run(r, RAID.duration + 0.1);
-    expect(r.result()).toEqual({ state: "lost", samples: 0 });
+    const res = r.result();
+    expect(res.state).toBe("lost");
+    expect(res.items).toEqual([kept]);
   });
 
   it("crawler bites can kill the player", () => {

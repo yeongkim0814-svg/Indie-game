@@ -163,18 +163,28 @@ export class Renderer {
 
   private drawPlayer(raid: Raid, fx: number, fy: number) {
     const g = this.ctx, p = raid.player;
-    this.shadow(fx, fy, 5);
-    g.fillStyle = "#142633";
-    g.fillRect(fx - 3, fy - 3, 2, 3); g.fillRect(fx + 1, fy - 3, 2, 3); // legs
-    g.fillRect(fx - 4, fy - 9, 8, 6); // torso
-    g.fillRect(fx - 3, fy - 14, 6, 5); // head
-    g.fillStyle = ROCK[2];
-    g.fillRect(fx - 3, fy - 14, 6, 1); g.fillRect(fx - 4, fy - 9, 8, 1);
-    g.fillStyle = "#6fe0d0"; g.fillRect(fx + (p.facing.x >= 0 ? 0 : -2), fy - 12, 2, 1); // visor glint
+    const dir = p.facing.x >= 0 ? 1 : -1;
+    const moving = Math.hypot(p.vel.x, p.vel.y) > 0.4;
+    const step = moving ? Math.floor(this.t * 9) & 1 : 0;
+    this.shadow(fx, fy, 7);
+    const dark = "#142633", mid = "#24405a", lit = ROCK[4];
+    // legs (alternate while walking)
+    g.fillStyle = dark;
+    g.fillRect(fx - 4, fy - 5 - step, 3, 5 + step); g.fillRect(fx + 1, fy - 5 - (1 - step) * (moving ? 1 : 0), 3, 5);
+    // backpack on the side away from facing
+    g.fillStyle = "#3b4d56"; g.fillRect(fx - dir * 7 - (dir > 0 ? 0 : 3), fy - 14, 4, 8);
+    g.fillStyle = "#1b2e39"; g.fillRect(fx - dir * 7 - (dir > 0 ? 0 : 3), fy - 8, 4, 2);
+    // coat
+    g.fillStyle = dark; g.fillRect(fx - 5, fy - 15, 10, 10);
+    g.fillStyle = mid; g.fillRect(fx - 5, fy - 15, 10, 2); g.fillRect(fx + (dir > 0 ? 3 : -5), fy - 13, 2, 7);
+    // hooded head
+    g.fillStyle = dark; g.fillRect(fx - 4, fy - 22, 8, 7);
+    g.fillStyle = mid; g.fillRect(fx - 4, fy - 22, 8, 1); g.fillRect(fx - 3, fy - 23, 6, 1);
+    g.fillStyle = "#6fe0d0"; g.fillRect(fx + (dir > 0 ? 1 : -4), fy - 19, 3, 1); // visor glint
     // gun line toward facing
-    const gx = fx, gy = fy - 6;
-    g.fillStyle = ROCK[4];
-    for (let i = 3; i <= 8; i++) g.fillRect(Math.round(gx + p.facing.x * i), Math.round(gy + p.facing.y * i), 2, 2);
+    const gx = fx, gy = fy - 10;
+    g.fillStyle = lit;
+    for (let i = 4; i <= 11; i++) g.fillRect(Math.round(gx + p.facing.x * i), Math.round(gy + p.facing.y * i), 2, 2);
   }
 
   private drawCrawler(c: Crawler, fx: number, fy: number, flash: boolean) {

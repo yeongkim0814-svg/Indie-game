@@ -3,6 +3,8 @@
  * Pure simulation in SI units (1 tile = 1 m); no rendering imports.
  */
 import { FIRST_MAP, parseMap, type ParsedMap } from "./raidMap";
+import { Grid } from "./inventory";
+import { ageItem, itemValue, makeItem, temperature, type Item } from "./items";
 
 export const RAID = {
   duration: 240, // s until sunset; staying out after that = lost
@@ -18,19 +20,22 @@ export const RAID = {
     autoAimRange: 9,
   },
   bullet: { mass: 0.5, speed: 20, life: 0.9, radius: 0.12, damage: 1 }, // mass exaggerated so momentum is felt
-  sample: { mass: 4, radius: 0.6 },
+  sample: { radius: 0.6 },
+  backpack: { w: 5, h: 3 },
+  notebook: { w: 2, h: 2 }, // secure container: survives death and sunset
   crawler: { mass: 20, radius: 0.35, hp: 4, drive: 300, drag: 100, aggro: 10, touchDamage: 1, touchCooldown: 0.8 },
 };
 
 export interface Vec2 { x: number; y: number }
 export interface RaidInput { move: Vec2; fire: boolean }
 export type RaidState = "running" | "extracted" | "dead" | "lost";
-export type RaidEvent = { kind: "shot" | "hit" | "kill" | "pickup" | "hurt" | "wall"; x: number; y: number };
+export type RaidEvent = { kind: "shot" | "hit" | "kill" | "pickup" | "full" | "drop" | "hurt" | "wall"; x: number; y: number };
 
-export interface Player { pos: Vec2; vel: Vec2; facing: Vec2; hp: number; carried: number; cooldown: number; hurtCooldown: number }
+export interface Player { pos: Vec2; vel: Vec2; facing: Vec2; hp: number; cooldown: number }
 export interface Crawler { pos: Vec2; vel: Vec2; hp: number; alive: boolean; touchCooldown: number }
 export interface Bullet { pos: Vec2; vel: Vec2; life: number }
-export interface Sample { pos: Vec2; taken: boolean }
+/** An item lying on the ground. `blocked` stops a full pack from re-trying it every frame until the player steps away. */
+export interface Sample { pos: Vec2; item: Item; taken: boolean; blocked: boolean }
 
 export function idleRaidInput(): RaidInput {
   return { move: { x: 0, y: 0 }, fire: false };
@@ -55,6 +60,8 @@ export class Raid {
   crawlers: Crawler[];
   bullets: Bullet[] = [];
   samples: Sample[];
+  backpack = new Grid(RAID.backpack.w, RAID.backpack.h);
+  notebook = new Grid(RAID.notebook.w, RAID.notebook.h);
   events: RaidEvent[] = [];
   private rand: () => number;
   private nightSpawnClock = 0;
@@ -63,13 +70,16 @@ export class Raid {
     this.map = parseMap(mapRows);
     this.rand = mulberry32(seed);
     const s = this.map.start;
-    this.player = { pos: { ...s }, vel: { x: 0, y: 0 }, facing: { x: 1, y: 0 }, hp: RAID.player.hp, carried: 0, cooldown: 0, hurtCooldown: 0 };
+    this.player = { pos: { ...s }, vel: { x: 0, y: 0 }, facing: { x: 1, y: 0 }, hp: RAID.player.hp, cooldown: 0 };
     this.crawlers = this.map.crawlers.map((c) => this.newCrawler(c));
-    this.samples = this.map.samples.map((p) => ({ pos: { ...p }, taken: false }));
+    this.samples = this.map.samples.map((p) => ({ pos: { x: p.x, y: p.y }, item: makeItem(p.kind), taken: false, blocked: false }));
   }
 
   /** Total moving mass: body plus what is carried (F = M·a, so a heavy pack slows acceleration). */
-  get playerMass() { return RAID.player.bodyMass + this.player.carried * RAID.sample.mass; }
+  get playerMass() { return RAID.player.bodyMass + this.backpack.mass + this.notebook.mass; }
+  get carriedItems(): Item[] { return [...this.backpack.items, ...this.notebook.items]; }
+  get carriedValue() { return this.carriedItems.reduce((v, it) => v + itemValue(it), 0); }
+  get temperature() { return temperature(this.daylight); }
   get timeLeft() { return Math.max(0, RAID.duration - this.time); }
   /** 1 = full day, 0 = sunset. Eases out over the last 30 % of the day. */
   get daylight() { return Math.min(1, Math.max(0, (RAID.duration - this.time) / (RAID.duration * (1 - RAID.nightFrom)))); }
@@ -177,7 +187,6 @@ export class Raid {
     this.bullets = this.bullets.filter((b) => b.life > 0);
 
     // crawlers chase within aggro range and bite on contact
-    p.hurtCooldown = Math.max(0, p.hurtCooldown - dt);
     for (const c of this.crawlers) {
       if (!c.alive) continue;
       const dx = p.pos.x - c.pos.x, dy = p.pos.y - c.pos.y, d = Math.hypot(dx, dy);
@@ -198,11 +207,24 @@ export class Raid {
       if (this.nightSpawnClock <= 0) { this.nightSpawnClock = 8; this.spawnAtEdge(); }
     }
 
-    // samples: walk over to pick up
+    // samples age by their own law whether carried or lying on the ground
+    const T = this.temperature;
+    for (const it of this.carriedItems) ageItem(it, dt, T);
+    for (const s of this.samples) if (!s.taken) ageItem(s.item, dt, T);
+
+    // samples: walk over to pick up into the backpack if it fits
     for (const s of this.samples) {
-      if (s.taken || Math.hypot(s.pos.x - p.pos.x, s.pos.y - p.pos.y) > RAID.sample.radius) continue;
-      s.taken = true; p.carried++;
-      this.events.push({ kind: "pickup", x: s.pos.x, y: s.pos.y });
+      if (s.taken) continue;
+      const near = Math.hypot(s.pos.x - p.pos.x, s.pos.y - p.pos.y) <= RAID.sample.radius;
+      if (!near) { s.blocked = false; continue; }
+      if (s.blocked) continue;
+      if (this.backpack.autoPlace(s.item)) {
+        s.taken = true;
+        this.events.push({ kind: "pickup", x: s.pos.x, y: s.pos.y });
+      } else {
+        s.blocked = true;
+        this.events.push({ kind: "full", x: s.pos.x, y: s.pos.y });
+      }
     }
 
     // extraction: hold position inside the zone
@@ -223,8 +245,18 @@ export class Raid {
     }
   }
 
-  /** What the player keeps: carried samples only survive extraction. */
+  /** Take an item out of the pack or notebook and leave it on the ground at the player's feet. */
+  dropItem(item: Item): boolean {
+    if (!this.backpack.remove(item) && !this.notebook.remove(item)) return false;
+    const p = this.player.pos;
+    this.samples.push({ pos: { x: p.x, y: p.y }, item, taken: false, blocked: true });
+    this.events.push({ kind: "drop", x: p.x, y: p.y });
+    return true;
+  }
+
+  /** What comes home: everything on extraction, only the notebook otherwise. */
   result() {
-    return { state: this.state, samples: this.state === "extracted" ? this.player.carried : 0 };
+    const items = this.state === "extracted" ? this.carriedItems : this.notebook.items;
+    return { state: this.state, items, value: Math.round(items.reduce((v, it) => v + itemValue(it), 0)) };
   }
 }
