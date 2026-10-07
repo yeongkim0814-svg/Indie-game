@@ -103,13 +103,22 @@ float mn(vec2 p) {
   vec2 q = vWPos.xz;
   float n = mn(q * 0.07) * 0.45 + mn(q * 0.23 + 7.1) * 0.35 + mn(q * 0.9 - 3.3) * 0.2;
   // sRGB ramp → linear: dark green, mid, sunlit, yellow highlight
-  vec3 c0 = vec3(0.022, 0.063, 0.012), c1 = vec3(0.078, 0.19, 0.024), c2 = vec3(0.26, 0.45, 0.06), c3 = vec3(0.55, 0.69, 0.15);
+  // ramp (linear): blue-green shade → mid → sunlit → yellow highlight
+  vec3 c0 = vec3(0.012, 0.05, 0.03), c1 = vec3(0.07, 0.18, 0.03), c2 = vec3(0.26, 0.45, 0.06), c3 = vec3(0.55, 0.69, 0.15);
   vec3 g = n < 0.4 ? mix(c0, c1, smoothstep(0.25, 0.4, n)) : n < 0.6 ? mix(c1, c2, smoothstep(0.42, 0.6, n)) : mix(c2, c3, smoothstep(0.62, 0.8, n));
-  // flowers: one speck in some cells of a 0.45 m grid, only near the camera
+  // rock breaking through the short turf: scattered outcrops, more toward the rim where turf thins
+  float rk = mn(q * 0.11 + 4.0) * 0.6 + mn(q * 0.5 - 2.0) * 0.4 + (1.0 - grassy) * 0.5;
+  float rock = smoothstep(0.66, 0.7, rk);
+  vec3 rockC = mix(vec3(0.02, 0.035, 0.05), vec3(0.16, 0.2, 0.25), smoothstep(0.45, 0.75, mn(q * 2.2)));
+  g = mix(g, rockC, rock);
+  // flowers in drifts: dense inside drift patches, sparse elsewhere; one speck per 0.45 m cell
+  float drift = smoothstep(0.5, 0.78, mn(q * 0.045 + 11.0));
   vec2 cell = floor(q / 0.45);
   vec2 f = fract(q / 0.45) - 0.5 - (vec2(mh(cell + 3.7), mh(cell + 9.1)) - 0.5) * 0.5;
-  float flower = step(0.9, mh(cell)) * step(length(f), 0.2) * step(0.45, n) * (1.0 - smoothstep(30.0, 45.0, length(vViewPosition)));
+  float chance = mix(0.06, 0.45, drift);
+  float flower = step(1.0 - chance, mh(cell)) * step(length(f), 0.2) * (1.0 - rock) * (1.0 - smoothstep(30.0, 45.0, length(vViewPosition)));
   g = mix(g, vec3(0.95), flower);
+  grassy = max(grassy, rock * step(-12.0, vWPos.y));
   diffuseColor.rgb = mix(diffuseColor.rgb, g, grassy);
 }`);
   };

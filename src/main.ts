@@ -7,7 +7,6 @@ import { createInput } from "./ui/input";
 import { buildMonoliths, buildTerrain } from "./render/terrain";
 import { buildSky } from "./render/sky";
 import { buildClouds } from "./render/clouds";
-import { buildGrass } from "./render/grass";
 import { buildWanderer } from "./render/wanderer";
 import { createPixelPipeline } from "./render/pixel";
 import { FOG_DENSITY, SKY, SUN_DIR, capSceneFog } from "./render/atmosphere";
@@ -35,8 +34,6 @@ scene.add(sky, clouds, buildTerrain(LITE ? 90 : 300));
 
 scene.add(buildMonoliths());
 
-const grass = buildGrass(LITE ? 3000 : 40000);
-scene.add(grass.mesh);
 
 const sim = new GameSim();
 const input = createInput(document.body);
@@ -105,14 +102,13 @@ function aimFrom(yaw: number, pitch: number, out: THREE.Vector3) {
 const simInput: SimInput = idleInput();
 let jumpWasHeld = false;
 let frames = 0, fpsClock = performance.now(), fps = 0;
-let last = performance.now(), acc = 0, tilt = 0, time = 0;
+let last = performance.now(), acc = 0, tilt = 0;
 const FIXED = 1 / 120;
 
 function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   acc += dt;
-  time += dt;
 
   aimFrom(input.yaw, input.pitch, aimDir);
   simInput.moveX = input.moveX; simInput.moveY = input.moveY; simInput.run = input.run;
@@ -183,9 +179,6 @@ function frame(now: number) {
   camera.lookAt(eye.clone().addScaledVector(aimDir, 14).addScaledVector(right, 0.9).add(new THREE.Vector3(0, 3, 0)));
   sky.position.copy(camera.position);
 
-  grass.uniforms.uTime.value = time;
-  grass.uniforms.uCenter.value.set(p.x, p.z);
-  grass.uniforms.uCam.value.set(camera.position.x, camera.position.z);
 
   pixel.render(scene, camera);
 
