@@ -59,32 +59,61 @@ try {
   if (partial) errors.push("a partial push locked sprint");
   await page.waitForTimeout(500);
 
-  // Scenario: aim straight down, jump, fire a charged heavy slug mid-air via the real UI buttons.
+  const settle = () => page.waitForFunction(() => window.__game.sim.player.grounded, null, { timeout: 10000 });
+  const press = async (sel) => {
+    const box = await page.locator(sel).boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(80);
+    await page.mouse.up();
+  };
+  await settle();
   const y0 = await page.evaluate(() => window.__game.sim.player.pos.y);
+
+  // Fire and launcher jump never engage together: with Fire held, a launcher-jump press is ignored.
+  {
+    const fb = await page.locator("#btn-fire").boundingBox();
+    await page.mouse.move(fb.x + 40, fb.y + 40);
+    await page.mouse.down();
+    const blocked = await page.evaluate(() => {
+      document.querySelector("#btn-lj").dispatchEvent(new PointerEvent("pointerdown", { pointerId: 7, bubbles: true }));
+      return { fire: window.__game.input.fireHeld, lj: window.__game.input.launchJumpHeld };
+    });
+    await page.mouse.up();
+    await page.waitForTimeout(200);
+    if (!blocked.fire || blocked.lj) errors.push("fire + launcher jump engaged together: " + JSON.stringify(blocked));
+    info.exclusion = blocked;
+    await settle();
+  }
+
+  // Jump method 3: view on the floor + Jump button => launcher jump along the view.
   await page.evaluate(() => { window.__game.input.pitch = -1.5; });
-  const jump = await page.locator("#btn-jump").boundingBox();
-  const fire = await page.locator("#btn-fire").boundingBox();
-  await page.mouse.move(jump.x + 30, jump.y + 30);
-  await page.mouse.down();
-  await page.waitForTimeout(120);
-  await page.mouse.up();
-  await page.waitForTimeout(150);
-  await page.mouse.move(fire.x + 40, fire.y + 40);
-  await page.mouse.down(); // hold = charge
-  await page.waitForTimeout(250);
-  const before = await page.evaluate(() => ({ vy: window.__game.sim.player.vel.y, air: !window.__game.sim.player.grounded }));
-  await page.mouse.up();   // release = fire (mid-air, aimed straight down)
-  await page.waitForTimeout(60);
-  const vyAfter = await page.evaluate(() => window.__game.sim.player.vel.y);
-  await page.waitForTimeout(190);
+  await press("#btn-jump");
+  await page.waitForTimeout(100);
+  const m3 = await page.evaluate(() => ({ shots: window.__game.sim.shots, vy: window.__game.sim.player.vel.y, lookingDown: window.__game.sim.lookingDown }));
   await page.screenshot({ path: "screenshots/m1-recoil.png" });
+  if (m3.shots !== 1 || m3.vy < 3 || !m3.lookingDown) errors.push("jump method 3 (look at floor + Jump) failed: " + JSON.stringify(m3));
+  await settle();
+
+  // Jump method 2: Launcher-jump button => fires opposite the stick direction (idle stick = straight up).
+  await page.evaluate(() => { window.__game.input.pitch = -0.25; });
+  await press("#btn-lj");
+  await page.waitForTimeout(100);
+  const m2 = await page.evaluate(() => ({ shots: window.__game.sim.shots, vy: window.__game.sim.player.vel.y }));
+  if (m2.shots !== 2 || m2.vy < 3) errors.push("jump method 2 (launcher jump) failed: " + JSON.stringify(m2));
+  await settle();
+
+  // Jump method 1: plain Jump button with a level view => leg jump, no shot.
+  await press("#btn-jump");
+  await page.waitForTimeout(100);
+  const m1 = await page.evaluate(() => ({ shots: window.__game.sim.shots, vy: window.__game.sim.player.vel.y }));
+  if (m1.shots !== 2 || m1.vy < 3) errors.push("jump method 1 (leg jump) failed: " + JSON.stringify(m1));
+  info.jumps = { m1, m2, m3 };
   const after = await page.evaluate(() => {
     const g = window.__game.sim;
     return { y: g.player.pos.y, vy: g.player.vel.y, shots: g.shots, energy: Math.round(g.energy.value), maxHeight: g.maxHeight };
   });
-  info.scenario = { y0, ...after, airborneAtFire: before.air, vyBefore: +before.vy.toFixed(2), vyAfter: +vyAfter.toFixed(2) };
-  if (!before.air) errors.push("scenario: player was not airborne when firing (timing)");
-  else if (after.shots < 1 || vyAfter - before.vy < 2) errors.push("scenario: firing down did not add upward velocity");
+  info.state = { y0, ...after };
   console.log(JSON.stringify({ ...info, errors }, null, 1));
   if (!info.webgl2 || errors.length) code = 1;
 } catch (e) {

@@ -53,7 +53,7 @@ launcherPivot.add(launcher, glow);
 player.add(body, cloak);
 scene.add(player, launcherPivot);
 
-// ---- crates, slug pool, recoil arrow ----
+// ---- crates, slug pool ----
 const crateMeshes = sim.crates.map(() => {
   const m = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.1, 1.1), new THREE.MeshLambertMaterial({ color: "#c98f4a", flatShading: true }));
   scene.add(m);
@@ -68,9 +68,6 @@ const slugMat = {
   light: new THREE.MeshBasicMaterial({ color: SLUGS.light.color }),
 };
 const slugPool: THREE.Mesh[] = [];
-const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), 1, 0x69e3c0, 0.5, 0.35);
-arrow.visible = false;
-scene.add(arrow);
 
 interface Puff { mesh: THREE.Mesh; life: number }
 const puffs: Puff[] = [];
@@ -114,8 +111,10 @@ function frame(now: number) {
   jumpWasHeld = input.jumpHeld;
   let jumpQueued = jumpEdge;
   while (acc >= FIXED) {
-    simInput.jump = jumpQueued || (input.jumpHeld && sim.player.grounded);
+    simInput.jump = jumpQueued || (input.jumpHeld && sim.player.grounded && !sim.lookingDown);
     jumpQueued = false;
+    simInput.launchJumpHeld = input.launchJumpHeld;
+    simInput.jumpHeld = input.jumpHeld;
     sim.step(FIXED, simInput);
     acc -= FIXED;
   }
@@ -162,16 +161,6 @@ function frame(now: number) {
     f.mesh.scale.multiplyScalar(1 + dt * 5);
     (f.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, f.life / 0.35) * 0.8;
     if (f.life <= 0) { scene.remove(f.mesh); f.mesh.geometry.dispose(); (f.mesh.material as THREE.Material).dispose(); puffs.splice(i, 1); }
-  }
-
-  // Δv preview arrow: recoil direction (opposite the shot), length ∝ Δv
-  const showArrow = sim.charging || input.fireHeld;
-  arrow.visible = showArrow;
-  if (showArrow) {
-    const dv = sim.predictedDeltaV(Math.max(sim.charge, 0.3));
-    arrow.position.set(p.x, p.y + 1.1, p.z);
-    arrow.setDirection(aimDir.clone().multiplyScalar(-1));
-    arrow.setLength(0.4 + dv * 0.45, 0.5, 0.35);
   }
 
   // third-person camera, slightly over the shoulder
