@@ -92,7 +92,8 @@ export function buildClouds(): THREE.Mesh {
       uSunDir: { value: SUN_DIR },
       uHorizon: { value: SKY.horizon },
       uLit: { value: new THREE.Color("#ffffff").multiplyScalar(1.2) },
-      uShadow: { value: new THREE.Color("#5680b6") },
+      uShadow: { value: new THREE.Color("#3f78b8") },
+      uMid: { value: new THREE.Color("#7fa9d4") },
       uFog: { value: CLOUD_FOG_DENSITY },
     },
     vertexShader: /* glsl */ `
@@ -114,7 +115,7 @@ export function buildClouds(): THREE.Mesh {
       }`,
     fragmentShader: /* glsl */ `
       uniform mat4 projectionMatrix;
-      uniform vec3 uSunDir, uHorizon, uLit, uShadow;
+      uniform vec3 uSunDir, uHorizon, uLit, uShadow, uMid;
       uniform float uFog;
       varying vec2 vUv;
       varying vec3 vView, vCenter;
@@ -156,19 +157,20 @@ export function buildClouds(): THREE.Mesh {
         // lumpy normal: breaks smooth sphere shading into cauliflower clusters
         vec3 lump = vec3(noise3(wn * 4.0 + sd * 1.8), noise3(wn * 4.0 - sd.yzx * 1.3), noise3(wn * 4.0 + sd.zxy * 2.1)) - 0.5;
         vec3 wnl = normalize(wn + lump * 0.55);
-        vec3 n = vec3(dot(wnl, camRight), dot(wnl, camUp), dot(wnl, camBack));
-        vec3 sunView = normalize((viewMatrix * vec4(uSunDir, 0.0)).xyz);
-        // mostly white; blue shadow gathers on the underside and the side away from the sun
-        // shade by height in the whole cloud first, puff normal only a little:
-        // per-puff rim darkening otherwise speckles the interior
-        float wrap = clamp(dot(n, sunView) * 0.5 + 0.7, 0.0, 1.0);
-        float height = smoothstep(0.0, 0.7, vShade);
-        float under = smoothstep(0.2, -0.8, n.y) * (1.0 - height);
-        // folds: shade pattern continuous across puffs (world-space noise), so the mass reads as one volume
-        float fold = noise3(sp * 0.035) * 0.65 + noise3(sp * 0.09) * 0.35;
-        float lit = mix(0.5, 1.0, height) * mix(1.0, wrap, 0.25) * (1.0 - 0.35 * under) * mix(0.72, 1.06, smoothstep(0.3, 0.7, fold));
-        vec3 col = mix(uShadow, uLit, smoothstep(0.4, 1.0, lit));
+        // sun-driven shading in WORLD space: puff normal vs sun, plus a coarse "mass" sawtooth along the
+        // sun axis so each lobe of the bank is bright on its sun side and blue on the far side
+        float ndl = dot(wnl, uSunDir);
+        float wrap = clamp(ndl * 0.75 + 0.5, 0.0, 1.0);
+        float ph = dot(sp, uSunDir) / 300.0 + noise3(sp * 0.006) * 0.7;
+        float saw = fract(ph);
+        float mass = 1.0 - smoothstep(0.35, 0.8, saw);
+        float fold = noise3(sp * 0.05) * 0.6 + noise3(sp * 0.13) * 0.4;
+        float lit = clamp(mix(wrap, mass, 0.5) + (fold - 0.5) * 0.3, 0.0, 1.0);
+        vec3 col = mix(uShadow, uLit, smoothstep(0.5, 1.0, lit));
+        col = mix(col, uMid, (1.0 - abs(lit - 0.5) * 2.0) * 0.35);
+        vec3 n = vec3(0.0, 0.0, 1.0);
         // silver lining where the sun sits behind the puff
+        vec3 sunView = normalize((viewMatrix * vec4(uSunDir, 0.0)).xyz);
         float back = max(-sunView.z, 0.0);
         col += uLit * 0.35 * back * smoothstep(0.82, 0.97, d);
         // spherical impostor depth so puffs intersect as volumes, not flat cards

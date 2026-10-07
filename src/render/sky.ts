@@ -33,7 +33,7 @@ export function buildSky(): THREE.Mesh {
         vec3 d = normalize(vDir);
         float h = max(d.y, 0.0);
         // pale band only near the horizon; most of the sky is saturated blue (references: ~65% of frame)
-        vec3 col = mix(uHorizon, uZenith, pow(smoothstep(0.0, 0.5, h), 0.5));
+        vec3 col = mix(uHorizon, uZenith, pow(smoothstep(0.0, 0.32, h), 0.7));
         col = mix(col, uHorizon * 0.92, smoothstep(0.0, -0.25, d.y));
         // cirrus: streaks on a high plane, stretched along one wind direction
         if (d.y > 0.04) {
