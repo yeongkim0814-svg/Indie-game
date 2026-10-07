@@ -4,7 +4,7 @@ import * as THREE from "three";
 export const SUN_DIR = new THREE.Vector3(0.3, 0.7, -0.65).normalize();
 
 export const SKY = {
-  zenith: new THREE.Color("#2e6fc4"),
+  zenith: new THREE.Color("#2c63a8"),
   /** cyan haze (~195°), not gray-white: distance reads as air */
   horizon: new THREE.Color("#a3cfe3"),
   sun: new THREE.Color("#fff4dc"),

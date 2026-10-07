@@ -87,12 +87,13 @@ function meadowMaterial(): THREE.MeshLambertMaterial {
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
   mat.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader
-      .replace("#include <common>", "#include <common>\nvarying vec3 vWPos;\nvarying float vSlope;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvSlope = 1.0 - normalize(mat3(modelMatrix) * objectNormal).y;");
+      .replace("#include <common>", "#include <common>\nvarying vec3 vWPos;\nvarying float vSlope;\nvarying vec3 vWN;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWN = normalize(mat3(modelMatrix) * objectNormal);\nvSlope = 1.0 - vWN.y;");
     sh.fragmentShader = sh.fragmentShader
       .replace("#include <common>", `#include <common>
 varying vec3 vWPos;
 varying float vSlope;
+varying vec3 vWN;
 ${GLSL_TERRAIN}
 float mh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float mn(vec2 p) {
@@ -104,11 +105,16 @@ float mn(vec2 p) {
   vec3 vc = vColor.rgb;
   float grassy = smoothstep(0.0, 0.04, vc.g - max(vc.r, vc.b) * 1.05) * step(-12.0, vWPos.y);
   vec2 q = vWPos.xz;
-  float n = mn(q * 0.07) * 0.45 + mn(q * 0.23 + 7.1) * 0.35 + mn(q * 0.9 - 3.3) * 0.2;
-  // sRGB ramp → linear: dark green, mid, sunlit, yellow highlight
-  // ramp (linear): blue-green shade → mid → sunlit → yellow highlight
-  vec3 c0 = vec3(0.012, 0.05, 0.03), c1 = vec3(0.07, 0.18, 0.03), c2 = vec3(0.26, 0.45, 0.06), c3 = vec3(0.55, 0.69, 0.15);
-  vec3 g = n < 0.4 ? mix(c0, c1, smoothstep(0.25, 0.4, n)) : n < 0.6 ? mix(c1, c2, smoothstep(0.42, 0.6, n)) : mix(c2, c3, smoothstep(0.62, 0.8, n));
+  // big patches + turf octaves at ~0.3-0.8 m so every low-res pixel gets its own tone
+  float n = mn(q * 0.07) * 0.34 + mn(q * 0.23 + 7.1) * 0.22 + mn(q * 0.9 - 3.3) * 0.14 + mn(q * 1.9 + 1.7) * 0.15 + mn(q * 3.7 - 8.2) * 0.15;
+  n = clamp((n - 0.5) * 1.5 + 0.42, 0.0, 1.0);
+  // ramp (linear of #192925 #273e2b #395330 #537039 #8a9f48): teal shade -> olive highlight only in sun patches
+  vec3 c0 = vec3(0.0097, 0.0222, 0.0185), c1 = vec3(0.0203, 0.0482, 0.0242), c2 = vec3(0.0409, 0.0865, 0.0296), c3 = vec3(0.0865, 0.162, 0.0409), c4 = vec3(0.254, 0.347, 0.0648);
+  vec3 g = mix(c0, c1, smoothstep(0.1, 0.3, n));
+  g = mix(g, c2, smoothstep(0.3, 0.5, n));
+  g = mix(g, c3, smoothstep(0.5, 0.72, n));
+  float sunP = smoothstep(0.55, 0.8, mn(q * 0.11 + 21.0));
+  g = mix(g, c4, smoothstep(0.7, 0.95, n) * sunP);
   // rock is exposed by shape: steep faces are rock with a thin turf lip above them (narrow smoothstep)
   float cliff = smoothstep(0.2, 0.26, vSlope);
   // near a convex edge (big drop within ~4 m) a few small stones break through the turf
@@ -137,6 +143,18 @@ float mn(vec2 p) {
   float flower = step(1.0 - chance, mh(cell)) * step(length(f), 0.2) * (1.0 - rock) * (1.0 - smoothstep(30.0, 45.0, length(vViewPosition)));
   g = mix(g, vec3(0.95), flower);
   grassy = max(grassy, rock * step(-12.0, vWPos.y));
+  // valley: fields/terraces squeezed into horizontal bands: lit green tops, blue shaded flanks
+  float vmask = 1.0 - step(-12.0, vWPos.y);
+  {
+    float fld = mn(vec2(q.x * 0.16, q.y * 0.012)) * 0.6 + mn(vec2(q.x * 0.5 + 3.0, q.y * 0.05)) * 0.25 + mn(vec2(q.x * 1.3, q.y * 0.2)) * 0.15;
+    float lit = dot(normalize(vWN), vec3(0.3, 0.7, -0.65)) / 0.75;
+    float s = lit * 1.2 + (fld - 0.5) * 1.1 - 0.35;
+    vec3 vb = mix(vec3(0.012, 0.05, 0.15), vec3(0.05, 0.16, 0.31), smoothstep(0.1, 0.5, fld));
+    vec3 vg = mix(vec3(0.07, 0.2, 0.09), vec3(0.4, 0.52, 0.2), smoothstep(0.45, 0.75, fld));
+    vec3 vv = mix(vb, vg, smoothstep(0.35, 0.6, s));
+    g = mix(g, vv, vmask * (1.0 - cliff));
+    grassy = max(grassy, vmask * (1.0 - cliff));
+  }
   diffuseColor.rgb = mix(diffuseColor.rgb, g, grassy);
 }`);
   };
