@@ -1,0 +1,91 @@
+import * as THREE from "three";
+import { FOG_DENSITY, GLSL_FOG, GLSL_TERRAIN, SKY, SUN_DIR } from "./atmosphere";
+
+export const GRASS_TILE = 64;
+
+/**
+ * Instanced grass blades in a tile that wraps around the player, so a fixed
+ * blade count always covers the area near the camera.
+ */
+export function buildGrass(count: number) {
+  // one blade: 3 segments, tapering to a tip
+  const seg = 3;
+  const pos: number[] = [];
+  for (let i = 0; i <= seg; i++) {
+    const t = i / seg, w = 0.5 * (1 - t);
+    if (i < seg) pos.push(-w, t, 0, w, t, 0); else pos.push(0, 1, 0);
+  }
+  const idx: number[] = [];
+  for (let i = 0; i < seg - 1; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  const a = (seg - 1) * 2; idx.push(a, a + 1, a + 2);
+
+  const geo = new THREE.InstancedBufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geo.setIndex(idx);
+  const inst = new Float32Array(count * 4);
+  let s = 12345;
+  const r = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+  for (let i = 0; i < count; i++) inst.set([r() * GRASS_TILE, r() * GRASS_TILE, r(), r()], i * 4);
+  geo.setAttribute("aInst", new THREE.InstancedBufferAttribute(inst, 4));
+  geo.instanceCount = count;
+
+  const mat = new THREE.ShaderMaterial({
+    side: THREE.DoubleSide,
+    uniforms: {
+      uTime: { value: 0 },
+      uCenter: { value: new THREE.Vector2() },
+      uCam: { value: new THREE.Vector2() },
+      uSunDir: { value: SUN_DIR },
+      uHorizon: { value: SKY.horizon },
+      uFog: { value: FOG_DENSITY },
+      uTile: { value: GRASS_TILE },
+    },
+    vertexShader: /* glsl */ `
+      uniform float uTime, uTile;
+      uniform vec2 uCenter, uCam;
+      attribute vec4 aInst;
+      varying float vT, vRand, vFade;
+      varying vec3 vView;
+      ${GLSL_TERRAIN}
+      void main() {
+        vec2 off = mod(aInst.xy - uCenter + uTile * 0.5, uTile) - uTile * 0.5;
+        vec2 wp = uCenter + off;
+        float dist = length(off);
+        vFade = (1.0 - smoothstep(uTile * 0.32, uTile * 0.5, dist)) * smoothstep(1.5, 4.0, length(wp - uCam));
+        float rand = aInst.z, rot = aInst.w * 6.2831;
+        float h = (0.22 + rand * 0.33) * vFade;
+        float w = 0.05 + rand * 0.03;
+        vec3 p = vec3(position.x * w, position.y * h, 0.0);
+        float c = cos(rot), s = sin(rot);
+        p = vec3(p.x * c, p.y, p.x * s);
+        float t = position.y;
+        float gust = sin(uTime * 0.9 + wp.x * 0.05 + wp.y * 0.03) * 0.5 + 0.5;
+        float sway = (sin(uTime * 2.3 + wp.x * 0.35 + wp.y * 0.25 + rand * 3.0) * 0.12 + gust * 0.35) * t * t;
+        p.x += sway; p.z += sway * 0.6;
+        vec3 world = vec3(wp.x, terrainHeight(wp), wp.y) + p;
+        vec4 mv = viewMatrix * vec4(world, 1.0);
+        vT = t; vRand = rand; vView = mv.xyz;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uSunDir, uHorizon;
+      uniform float uFog;
+      varying float vT, vRand, vFade;
+      varying vec3 vView;
+      ${GLSL_FOG}
+      void main() {
+        if (vFade < 0.02) discard;
+        vec3 root = vec3(0.035, 0.09, 0.025);
+        vec3 tip = mix(vec3(0.20, 0.42, 0.06), vec3(0.42, 0.55, 0.10), vRand);
+        vec3 col = mix(root, tip, vT);
+        float sun = max(uSunDir.y, 0.0) * 1.25 + 0.35;
+        col *= sun;
+        if (vRand > 0.965 && vT > 0.8) col = vec3(1.1, 1.1, 1.05);
+        col = applyAerial(col, length(vView), uFog, uHorizon);
+        gl_FragColor = vec4(col, 1.0);
+      }`,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  return { mesh, uniforms: mat.uniforms };
+}

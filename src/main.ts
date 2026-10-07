@@ -1,40 +1,57 @@
 import * as THREE from "three";
 import { SLUGS } from "./game/config";
 import { GameSim, idleInput, type SimInput } from "./game/sim";
+import { heightAt } from "./game/world";
 import { createHud } from "./ui/hud";
 import { createInput } from "./ui/input";
-import { buildTerrain } from "./render/terrain";
-import { createCharacterMesh } from "./render/models/character";
+import { buildMonoliths, buildTerrain } from "./render/terrain";
+import { buildSky } from "./render/sky";
+import { buildClouds } from "./render/clouds";
+import { buildGrass } from "./render/grass";
+import { buildWanderer } from "./render/wanderer";
+import { createPixelPipeline } from "./render/pixel";
+import { FOG_DENSITY, SKY, SUN_DIR } from "./render/atmosphere";
 
 const canvas = document.createElement("canvas");
 document.body.prepend(canvas);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance" });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * 0.85);
+const pixel = createPixelPipeline(renderer);
 
 const scene = new THREE.Scene();
-const fog = new THREE.Color("#cfe6ff");
-scene.background = fog;
-scene.fog = new THREE.Fog(fog, 40, 190);
-const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 320);
-scene.add(new THREE.HemisphereLight(new THREE.Color("#7fb6ff"), 0x3a5a40, 1.1));
-const sun = new THREE.DirectionalLight(0xfff1d6, 1.6);
-sun.position.set(30, 50, 20);
+scene.fog = new THREE.FogExp2(SKY.horizon, FOG_DENSITY);
+const camera = new THREE.PerspectiveCamera(68, 1, 0.1, 3200);
+scene.add(new THREE.HemisphereLight(new THREE.Color("#bcd4f5"), new THREE.Color("#3f5530"), 1.4));
+const sun = new THREE.DirectionalLight(0xfff1dc, 3.2);
+sun.position.copy(SUN_DIR).multiplyScalar(100);
 scene.add(sun);
-scene.add(buildTerrain());
+
+const sky = buildSky();
+const clouds = buildClouds();
+scene.add(sky, clouds, buildTerrain());
+
+// Capture sky + clouds once so the monoliths mirror them.
+const cubeRT = new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType });
+const cubeCam = new THREE.CubeCamera(1, 3000, cubeRT);
+cubeCam.position.set(0, 120, -200);
+scene.add(cubeCam);
+cubeCam.update(renderer, scene);
+scene.add(buildMonoliths(cubeRT.texture));
+
+const grass = buildGrass(40000);
+scene.add(grass.mesh);
 
 const sim = new GameSim();
 const input = createInput(document.body);
 const updateHud = createHud(document.body);
 
-// ---- character: mesh with integrated launcher ----
 const player = new THREE.Group();
-const characterMesh = createCharacterMesh();
-player.add(characterMesh);
+const wanderer = buildWanderer();
+player.add(wanderer.root);
 scene.add(player);
 
 // ---- crates, slug pool ----
 const crateMeshes = sim.crates.map(() => {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.1, 1.1), new THREE.MeshLambertMaterial({ color: "#c98f4a", flatShading: true }));
+  const m = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.1, 1.1), new THREE.MeshLambertMaterial({ color: "#8c8577" }));
   scene.add(m);
   return m;
 });
@@ -57,10 +74,24 @@ function puff(x: number, y: number, z: number, color: number, size: number) {
   puffs.push({ mesh, life: 0.35 });
 }
 
+// pixel-size toggle (comparison): x3 → x4 → x2 → smooth
+const PX_STEPS = [3, 4, 2, 1];
+const pxBtn = document.createElement("button");
+pxBtn.id = "btn-px";
+pxBtn.style.cssText = "position:fixed;right:max(12px,env(safe-area-inset-right));top:max(40px,env(safe-area-inset-top));z-index:5;" +
+  "padding:6px 10px;border-radius:14px;border:1px solid rgba(255,255,255,.6);background:rgba(10,16,34,.45);color:#fff;font:600 12px system-ui;";
+const pxLabel = () => (pxBtn.textContent = pixel.scale === 1 ? "도트 끔" : `도트 x${pixel.scale}`);
+pxBtn.addEventListener("pointerdown", (e) => {
+  e.stopPropagation();
+  pixel.setScale(PX_STEPS[(PX_STEPS.indexOf(pixel.scale) + 1) % PX_STEPS.length]);
+  pxLabel();
+});
+document.body.appendChild(pxBtn);
+pxLabel();
+
 function resize() {
-  const w = window.innerWidth, h = window.innerHeight;
-  renderer.setSize(w, h, false);
-  camera.aspect = w / h;
+  pixel.resize();
+  camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
 }
 window.addEventListener("resize", resize);
@@ -74,13 +105,14 @@ function aimFrom(yaw: number, pitch: number, out: THREE.Vector3) {
 const simInput: SimInput = idleInput();
 let jumpWasHeld = false;
 let frames = 0, fpsClock = performance.now(), fps = 0;
-let last = performance.now(), acc = 0, tilt = 0;
+let last = performance.now(), acc = 0, tilt = 0, time = 0;
 const FIXED = 1 / 120;
 
 function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   acc += dt;
+  time += dt;
 
   aimFrom(input.yaw, input.pitch, aimDir);
   simInput.moveX = input.moveX; simInput.moveY = input.moveY; simInput.run = input.run;
@@ -103,9 +135,10 @@ function frame(now: number) {
   player.position.set(p.x, p.y, p.z);
   const hv = Math.hypot(sim.player.vel.x, sim.player.vel.z);
   if (hv > 0.5) player.rotation.y = Math.atan2(-sim.player.vel.x, -sim.player.vel.z);
-  // lean into velocity change (cloth/recoil read)
   tilt += ((sim.player.grounded ? 0 : THREE.MathUtils.clamp(sim.player.vel.y * 0.04, -0.5, 0.5)) - tilt) * 0.2;
-  characterMesh.rotation.x = -tilt * 0.5;
+  wanderer.root.rotation.x = -tilt * 0.5;
+  wanderer.animate(dt, hv, sim.player.grounded);
+  wanderer.glow.setRGB(0.5, 2.4, 1.9).multiplyScalar(0.3 + 0.7 * sim.energy.fraction);
 
   sim.crates.forEach((c, i) => crateMeshes[i].position.set(c.pos.x, c.pos.y + 0.55, c.pos.z));
 
@@ -136,15 +169,20 @@ function frame(now: number) {
     if (f.life <= 0) { scene.remove(f.mesh); f.mesh.geometry.dispose(); (f.mesh.material as THREE.Material).dispose(); puffs.splice(i, 1); }
   }
 
-  // third-person camera, slightly over the shoulder
-  const eye = new THREE.Vector3(p.x, p.y + 1.5, p.z);
+  // third-person camera, slightly over the shoulder and a bit low so giants loom
+  const eye = new THREE.Vector3(p.x, p.y + 1.4, p.z);
   const right = new THREE.Vector3(Math.cos(input.yaw), 0, -Math.sin(input.yaw));
-  const cam = eye.clone().addScaledVector(aimDir, -7.5).addScaledVector(right, 0.7);
-  cam.y = Math.max(cam.y, sim.player.pos.y - 1, 0.5);
+  const cam = eye.clone().addScaledVector(aimDir, -6.5).addScaledVector(right, 0.6);
+  cam.y = Math.max(cam.y, sim.player.pos.y - 0.6, heightAt(cam.x, cam.z) + 1.1);
   camera.position.copy(cam);
-  camera.lookAt(eye.clone().addScaledVector(aimDir, 14).addScaledVector(right, 0.7));
+  camera.lookAt(eye.clone().addScaledVector(aimDir, 14).addScaledVector(right, 0.6));
+  sky.position.copy(camera.position);
 
-  renderer.render(scene, camera);
+  grass.uniforms.uTime.value = time;
+  grass.uniforms.uCenter.value.set(p.x, p.z);
+  grass.uniforms.uCam.value.set(camera.position.x, camera.position.z);
+
+  pixel.render(scene, camera);
 
   frames++;
   if (now - fpsClock > 500) {
@@ -159,4 +197,4 @@ function frame(now: number) {
 requestAnimationFrame(frame);
 
 // Test/debug hook (used by headless checks).
-(window as unknown as Record<string, unknown>).__game = { sim, input };
+(window as unknown as Record<string, unknown>).__game = { sim, input, pixel };

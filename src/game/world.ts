@@ -33,8 +33,33 @@ export const CRATE_SPAWNS = [
   { x: 12, z: -18 },
 ];
 
+/** Colossal monoliths: axis-aligned boxes. `top` is world height of the roof. */
+export interface Monolith {
+  x: number;
+  z: number;
+  /** half extents of the footprint */
+  hx: number;
+  hz: number;
+  top: number;
+}
+
+export const MONOLITHS: Monolith[] = [
+  { x: -95, z: -170, hx: 22, hz: 34, top: 260 },
+  { x: 120, z: -240, hx: 30, hz: 20, top: 330 },
+  { x: 20, z: -420, hx: 26, hz: 26, top: 380 },
+  { x: -230, z: 60, hx: 18, hz: 40, top: 240 },
+];
+
+/** Slab spanning the top of two monoliths (visual only, out of reach). */
+export const SPANS: { a: number; b: number; y: number; thick: number; width: number }[] = [
+  { a: 0, b: 1, y: 230, thick: 22, width: 30 },
+];
+
 export function heightAt(x: number, z: number): number {
   let h = terrainHeight(x, z);
+  for (const m of MONOLITHS) {
+    if (Math.abs(x - m.x) <= m.hx && Math.abs(z - m.z) <= m.hz && m.top > h) h = m.top;
+  }
   for (const p of PILLARS) {
     const dx = x - p.x, dz = z - p.z;
     if (dx * dx + dz * dz <= p.r * p.r && p.top > h) h = p.top;
