@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { GLSL_TERRAIN } from "./atmosphere";
 import { MONOLITHS, PILLARS, SLABS, VALLEY_FLOOR, WATER_LEVEL, terrainHeight } from "../game/world";
 
 function hash(x: number, y: number) {
@@ -86,11 +87,13 @@ function meadowMaterial(): THREE.MeshLambertMaterial {
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
   mat.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader
-      .replace("#include <common>", "#include <common>\nvarying vec3 vWPos;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+      .replace("#include <common>", "#include <common>\nvarying vec3 vWPos;\nvarying float vSlope;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvSlope = 1.0 - normalize(mat3(modelMatrix) * objectNormal).y;");
     sh.fragmentShader = sh.fragmentShader
       .replace("#include <common>", `#include <common>
 varying vec3 vWPos;
+varying float vSlope;
+${GLSL_TERRAIN}
 float mh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float mn(vec2 p) {
   vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
@@ -106,10 +109,25 @@ float mn(vec2 p) {
   // ramp (linear): blue-green shade → mid → sunlit → yellow highlight
   vec3 c0 = vec3(0.012, 0.05, 0.03), c1 = vec3(0.07, 0.18, 0.03), c2 = vec3(0.26, 0.45, 0.06), c3 = vec3(0.55, 0.69, 0.15);
   vec3 g = n < 0.4 ? mix(c0, c1, smoothstep(0.25, 0.4, n)) : n < 0.6 ? mix(c1, c2, smoothstep(0.42, 0.6, n)) : mix(c2, c3, smoothstep(0.62, 0.8, n));
-  // rock breaking through the short turf: scattered outcrops, more toward the rim where turf thins
-  float rk = mn(q * 0.11 + 4.0) * 0.6 + mn(q * 0.5 - 2.0) * 0.4 + (1.0 - grassy) * 0.5;
-  float rock = smoothstep(0.66, 0.7, rk);
-  vec3 rockC = mix(vec3(0.02, 0.035, 0.05), vec3(0.16, 0.2, 0.25), smoothstep(0.45, 0.75, mn(q * 2.2)));
+  // rock is exposed by shape: steep faces are rock with a thin turf lip above them (narrow smoothstep)
+  float cliff = smoothstep(0.2, 0.26, vSlope);
+  // near a convex edge (big drop within ~4 m) a few small stones break through the turf
+  float drop = 0.0;
+  if (vWPos.y > -12.0) {
+    float h0 = terrainHeight(q);
+    for (int i = 0; i < 8; i++) {
+      float ang = float(i) * 0.7853982;
+      drop = max(drop, h0 - terrainHeight(q + 4.0 * vec2(cos(ang), sin(ang))));
+    }
+  }
+  float edge = smoothstep(3.0, 9.0, drop);
+  vec2 sc = floor(q / 0.6);
+  vec2 sf = fract(q / 0.6) - 0.5 - (vec2(mh(sc + 1.3), mh(sc + 5.9)) - 0.5) * 0.4;
+  float stone = step(1.0 - 0.14 * edge, mh(sc + 17.0)) * step(length(sf), 0.14 + 0.1 * mh(sc + 2.2));
+  float rock = max(cliff, stone);
+  // strata: noise stretched along y gives vertical streaks, dark recesses to lit facets (#1c2833 .. #4f6070)
+  float st = mn(vec2(q.x * 0.8 + q.y * 0.8, vWPos.y * 0.15)) * 0.65 + mn(vec2(q.x * 2.3 - q.y * 2.1, vWPos.y * 0.5)) * 0.35;
+  vec3 rockC = mix(vec3(0.011, 0.021, 0.033), vec3(0.078, 0.117, 0.162), smoothstep(0.3, 0.75, st));
   g = mix(g, rockC, rock);
   // flowers in drifts: dense inside drift patches, sparse elsewhere; one speck per 0.45 m cell
   float drift = smoothstep(0.5, 0.78, mn(q * 0.045 + 11.0));
