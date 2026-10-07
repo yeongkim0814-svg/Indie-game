@@ -4,6 +4,7 @@ import { GameSim, idleInput, type SimInput } from "./game/sim";
 import { createHud } from "./ui/hud";
 import { createInput } from "./ui/input";
 import { buildTerrain } from "./render/terrain";
+import { createCharacterMesh } from "./render/models/character";
 
 const canvas = document.createElement("canvas");
 document.body.prepend(canvas);
@@ -27,16 +28,7 @@ const updateHud = createHud(document.body);
 
 // ---- character: capsule body + oversized launcher that points along the aim ----
 const player = new THREE.Group();
-const body = new THREE.Mesh(
-  new THREE.CapsuleGeometry(0.42, 0.9, 4, 8),
-  new THREE.MeshLambertMaterial({ color: "#f2f5ff", flatShading: true }),
-);
-body.position.y = 0.95;
-const cloak = new THREE.Mesh(
-  new THREE.ConeGeometry(0.55, 1.1, 6),
-  new THREE.MeshLambertMaterial({ color: "#e0654f", flatShading: true }),
-);
-cloak.position.set(0, 0.85, 0.2);
+const characterMesh = createCharacterMesh();
 const launcherPivot = new THREE.Group();
 launcherPivot.position.set(0, 1.3, 0);
 const launcher = new THREE.Mesh(
@@ -50,7 +42,7 @@ const glow = new THREE.Mesh(
 );
 glow.position.set(0.3, 0.19, 0.6);
 launcherPivot.add(launcher, glow);
-player.add(body, cloak);
+player.add(characterMesh);
 scene.add(player, launcherPivot);
 
 // ---- crates, slug pool ----
@@ -126,8 +118,7 @@ function frame(now: number) {
   if (hv > 0.5) player.rotation.y = Math.atan2(-sim.player.vel.x, -sim.player.vel.z);
   // lean into velocity change (cloth/recoil read)
   tilt += ((sim.player.grounded ? 0 : THREE.MathUtils.clamp(sim.player.vel.y * 0.04, -0.5, 0.5)) - tilt) * 0.2;
-  body.rotation.x = -tilt;
-  cloak.rotation.x = 0.25 + tilt * 0.8 + Math.min(0.9, hv * 0.05);
+  characterMesh.rotation.x = -tilt * 0.5;
   launcherPivot.position.set(p.x, p.y + 1.3, p.z);
   launcherPivot.lookAt(p.x + aimDir.x * 10, p.y + 1.3 + aimDir.y * 10, p.z + aimDir.z * 10);
   (glow.material as THREE.MeshBasicMaterial).color.setHSL(0.45 - 0.45 * (1 - sim.energy.fraction) * 0.9, 0.7, 0.35 + 0.35 * sim.energy.fraction);
