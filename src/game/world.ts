@@ -17,14 +17,21 @@ export function terrainHeight(x: number, z: number): number {
   const k = Math.hypot(ex, ez) + 0.07 * Math.sin(a * 5 + 1.3) + 0.04 * Math.sin(a * 13);
   const t = smooth(1, 1.16, k);
   if (t <= 0) return plateau;
+  // Promontory: cliff edge sticks out at spawn location
+  const promTheta = Math.atan2(z + 20, x - 85), promR = Math.hypot(x - 85, z + 20);
+  const promExpose = smooth(8, 12, promR) * (1 - smooth(0.5, 2, Math.abs(promTheta + Math.PI / 2)));
+  const promDrop = promExpose > 0.5 ? -8 * (1 - promExpose) : 0;
   // river crosses the rim view (+x) as a band at mid distance
   const river = 300 + 70 * Math.sin(z * 0.006) + 30 * Math.sin(z * 0.017);
   const carve = 6 * (1 - smooth(14, 34, Math.abs(x - river)));
   // rolling ridges inside the valley give layered silhouettes at mid distance
   const ridge = Math.max(0, Math.sin(x * 0.012 + Math.cos(z * 0.009) * 2) * Math.sin(z * 0.01 + 0.7));
   const hills = Math.pow(ridge, 1.5) * 55 * smooth(130, 220, Math.hypot(x, z + 20));
-  const valley = VALLEY_FLOOR + 3 * Math.sin(x * 0.02) * Math.cos(z * 0.017) + hills - carve;
-  return plateau + (valley - plateau) * t;
+  // Terraces in valley: stacked mesa-like plateaus at different heights
+  const mesa1 = smooth(180, 240, x) * (1 - smooth(260, 300, x)) * 8; // y range -38 → -30
+  const mesa2 = smooth(260, 310, x) * (1 - smooth(350, 380, x)) * 5; // y range -30 → -25
+  const valley = VALLEY_FLOOR + 3 * Math.sin(x * 0.02) * Math.cos(z * 0.017) + hills - carve + mesa1 + mesa2;
+  return plateau + (valley + promDrop - plateau) * t;
 }
 
 /** Plateau the player starts on; keep in sync with GLSL_TERRAIN. */

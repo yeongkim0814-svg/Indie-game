@@ -24,12 +24,17 @@ float terrainHeight(vec2 p) {
   float k = length(e) + 0.07 * sin(a * 5.0 + 1.3) + 0.04 * sin(a * 13.0);
   float t = smoothstep(1.0, 1.16, k);
   if (t <= 0.0) return plateau;
+  float mesa1 = smoothstep(180.0, 240.0, p.x) * (1.0 - smoothstep(260.0, 300.0, p.x)) * 8.0;
+  float mesa2 = smoothstep(260.0, 310.0, p.x) * (1.0 - smoothstep(350.0, 380.0, p.x)) * 5.0;
+  float promTheta = atan(p.y + 20.0, p.x - 85.0), promR = length(vec2(p.x - 85.0, p.y + 20.0));
+  float promExpose = smoothstep(8.0, 12.0, promR) * (1.0 - smoothstep(0.5, 2.0, abs(promTheta + 1.5708)));
+  float promDrop = promExpose > 0.5 ? -8.0 * (1.0 - promExpose) : 0.0;
   float river = 300.0 + 70.0 * sin(p.y * 0.006) + 30.0 * sin(p.y * 0.017);
   float carve = 6.0 * (1.0 - smoothstep(14.0, 34.0, abs(p.x - river)));
   float ridge = max(0.0, sin(p.x * 0.012 + cos(p.y * 0.009) * 2.0) * sin(p.y * 0.01 + 0.7));
   float hills = pow(ridge, 1.5) * 55.0 * smoothstep(130.0, 220.0, length(vec2(p.x, p.y + 20.0)));
   float valley = -38.0 + 3.0 * sin(p.x * 0.02) * cos(p.y * 0.017) + hills - carve;
-  return mix(plateau, valley, t);
+  return mix(plateau, valley + promDrop, t);
 }`;
 
 export const GLSL_FOG = /* glsl */ `
