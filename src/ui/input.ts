@@ -7,6 +7,8 @@ export interface InputState {
   jumpHeld: boolean;
   fireHeld: boolean;
   switchPressed: boolean;
+  /** Stick was released while pushed hard forward: keep sprinting forward until the stick is touched again. */
+  sprintLock: boolean;
   yaw: number;
   pitch: number;
 }
@@ -16,14 +18,15 @@ const PITCH_MIN = -1.5, PITCH_MAX = 0.9;
 
 export function createInput(root: HTMLElement): InputState {
   const s: InputState = {
-    moveX: 0, moveY: 0, run: false, jumpHeld: false, fireHeld: false, switchPressed: false, yaw: 0, pitch: -0.25,
+    moveX: 0, moveY: 0, run: false, jumpHeld: false, fireHeld: false, switchPressed: false, sprintLock: false, yaw: 0, pitch: -0.25,
   };
 
   // ---- on-screen controls ----
   const ui = document.createElement("div");
   ui.id = "controls";
   ui.innerHTML = `
-    <div id="stick"><div id="knob"></div></div>
+    <div id="stick"><div id="lockmark">▲</div><div id="knob"></div></div>
+    <div id="sprintbadge">자동 달리기 ▲<small>조이스틱을 터치하면 해제</small></div>
     <button class="btn" id="btn-slug">탄 교체</button>
     <button class="btn" id="btn-jump">점프</button>
     <button class="btn" id="btn-fire">발사<br><small>꾹 눌러 차지</small></button>`;
@@ -41,11 +44,23 @@ export function createInput(root: HTMLElement): InputState {
     #btn-slug { right: 30px; bottom: 156px; width: 64px; height: 64px; font-size: 12px; }
     #stick { position: absolute; width: 120px; height: 120px; border-radius: 50%; border: 2px solid rgba(255,255,255,.4);
       background: rgba(255,255,255,.08); display: none; }
+    #lockmark { position: absolute; left: 36px; top: -62px; width: 48px; height: 40px; border-radius: 20px; display: flex; align-items: center; justify-content: center;
+      border: 2px solid rgba(255,255,255,.5); color: rgba(255,255,255,.7); font: 700 16px system-ui, sans-serif; background: rgba(20,30,60,.35); }
+    #stick.lockready #lockmark { background: rgba(255,210,94,.75); color: #1b2238; border-color: #fff; }
+    #sprintbadge { position: absolute; left: max(18px, env(safe-area-inset-left)); bottom: 40px; display: none; padding: 8px 14px; border-radius: 18px;
+      background: rgba(255,210,94,.8); color: #1b2238; font: 700 14px system-ui, sans-serif; pointer-events: none; }
+    #sprintbadge small { display: block; font-weight: 500; font-size: 10px; opacity: .8; }
     #knob { position: absolute; left: 36px; top: 36px; width: 48px; height: 48px; border-radius: 50%; background: rgba(255,255,255,.55); }`;
   document.head.appendChild(style);
 
   const stick = ui.querySelector<HTMLElement>("#stick")!;
   const knob = ui.querySelector<HTMLElement>("#knob")!;
+  const badge = ui.querySelector<HTMLElement>("#sprintbadge")!;
+  const setLock = (on: boolean) => {
+    s.sprintLock = on;
+    badge.style.display = on ? "block" : "none";
+    if (on) { s.moveX = 0; s.moveY = 1; s.run = true; }
+  };
   const bind = (id: string, down: () => void, up: () => void) => {
     const el = ui.querySelector<HTMLElement>(id)!;
     el.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); el.setPointerCapture(e.pointerId); el.classList.add("on"); down(); });
@@ -58,12 +73,15 @@ export function createInput(root: HTMLElement): InputState {
   bind("#btn-slug", () => (s.switchPressed = true), () => (s.switchPressed = false));
 
   // ---- free touch: left half = stick, right half = aim drag ----
-  const roles = new Map<number, { kind: "stick" | "aim"; x: number; y: number; ox: number; oy: number }>();
+  const roles = new Map<number, { kind: "stick" | "aim"; x: number; y: number; ox: number; oy: number; lockReady: boolean }>();
+  // Releasing inside this zone (pushed to the rim, within ±30° of straight up) locks sprint.
+  const LOCK_ANGLE = (30 * Math.PI) / 180;
   window.addEventListener("pointerdown", (e) => {
     if ((e.target as HTMLElement).closest?.(".btn")) return;
     const kind = e.clientX < window.innerWidth * 0.45 ? "stick" : "aim";
-    roles.set(e.pointerId, { kind, x: e.clientX, y: e.clientY, ox: e.clientX, oy: e.clientY });
+    roles.set(e.pointerId, { kind, x: e.clientX, y: e.clientY, ox: e.clientX, oy: e.clientY, lockReady: false });
     if (kind === "stick") {
+      if (s.sprintLock) { setLock(false); s.moveX = s.moveY = 0; s.run = false; }
       stick.style.display = "block";
       stick.style.left = `${e.clientX - 60}px`;
       stick.style.top = `${e.clientY - 60}px`;
@@ -83,6 +101,9 @@ export function createInput(root: HTMLElement): InputState {
       s.moveX = (dx * k) / max;
       s.moveY = (-dy * k) / max;
       s.run = len > max * 0.9;
+      const fromUp = Math.abs(Math.atan2(dx, -dy));
+      r.lockReady = len >= max * 1.15 && fromUp <= LOCK_ANGLE;
+      stick.classList.toggle("lockready", r.lockReady);
       knob.style.transform = `translate(${dx * k}px, ${dy * k}px)`;
     }
   });
@@ -92,6 +113,8 @@ export function createInput(root: HTMLElement): InputState {
     roles.delete(e.pointerId);
     if (r.kind === "stick") {
       s.moveX = s.moveY = 0; s.run = false;
+      stick.classList.remove("lockready");
+      if (r.lockReady) setLock(true);
       stick.style.display = "none";
       knob.style.transform = "";
     }
@@ -113,7 +136,11 @@ export function createInput(root: HTMLElement): InputState {
     s.yaw += turn * 0.04;
     s.pitch = clamp(s.pitch + look * 0.03, PITCH_MIN, PITCH_MAX);
   };
-  window.addEventListener("keydown", (e) => { keys.add(e.code); refresh(); });
+  window.addEventListener("keydown", (e) => {
+    if (s.sprintLock && ["KeyW", "KeyA", "KeyS", "KeyD"].includes(e.code)) setLock(false);
+    keys.add(e.code);
+    refresh();
+  });
   window.addEventListener("keyup", (e) => { keys.delete(e.code); refresh(); });
   // arrow keys repeat via keydown; the per-frame refresh keeps held arrows turning
   setInterval(() => { if (keys.size) refresh(); }, 16);

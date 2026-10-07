@@ -27,6 +27,38 @@ try {
   mkdirSync("screenshots", { recursive: true });
   await page.screenshot({ path: "screenshots/m1-idle.png" });
 
+  // Scenario: push the stick far forward and release -> sprint locks and keeps running.
+  await page.evaluate(() => { window.__game.input.pitch = -0.25; window.__game.input.yaw = 0; });
+  const z0 = await page.evaluate(() => window.__game.sim.player.pos.z);
+  await page.mouse.move(80, 600);
+  await page.mouse.down();
+  await page.mouse.move(80, 540, { steps: 4 });
+  await page.mouse.move(80, 480, { steps: 4 }); // 120px up: well past the rim
+  await page.mouse.up();
+  await page.waitForTimeout(900);
+  const lock = await page.evaluate(() => {
+    const g = window.__game;
+    return { locked: g.input.sprintLock, speed: Math.hypot(g.sim.player.vel.x, g.sim.player.vel.z), z: g.sim.player.pos.z };
+  });
+  info.sprintLock = { ...lock, dz: +(lock.z - z0).toFixed(2) };
+  if (!lock.locked || lock.speed < 7 || lock.z >= z0 - 3) errors.push("sprint lock did not keep the player running forward");
+  await page.screenshot({ path: "screenshots/m1-sprint.png" });
+  // Touching the stick again cancels the lock.
+  await page.mouse.move(80, 600);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  const unlocked = await page.evaluate(() => !window.__game.input.sprintLock);
+  if (!unlocked) errors.push("touching the stick did not cancel sprint lock");
+  // A partial push (below the lock zone) must not lock.
+  await page.mouse.move(80, 600);
+  await page.mouse.down();
+  await page.mouse.move(80, 560, { steps: 3 });
+  await page.mouse.up();
+  const partial = await page.evaluate(() => window.__game.input.sprintLock);
+  if (partial) errors.push("a partial push locked sprint");
+  await page.waitForTimeout(500);
+
   // Scenario: aim straight down, jump, fire a charged heavy slug mid-air via the real UI buttons.
   const y0 = await page.evaluate(() => window.__game.sim.player.pos.y);
   await page.evaluate(() => { window.__game.input.pitch = -1.5; });
