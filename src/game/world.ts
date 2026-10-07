@@ -69,8 +69,8 @@ export interface Monolith {
 }
 
 export const MONOLITHS: Monolith[] = [
-  { x: 330, z: -230, hx: 32, hz: 32, top: 420 },
-  { x: 430, z: 170, hx: 40, hz: 26, top: 380 },
+  { x: 820, z: -620, hx: 45, hz: 45, top: 520 },
+  { x: -420, z: -320, hx: 40, hz: 26, top: 380 },
   { x: -230, z: 60, hx: 18, hz: 40, top: 240 },
   { x: 120, z: -470, hx: 26, hz: 26, top: 360 },
 ];

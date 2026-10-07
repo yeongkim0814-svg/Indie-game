@@ -57,7 +57,8 @@ export function buildGrass(count: number) {
         float slope = abs(terrainHeight(wp + vec2(0.7, 0.0)) - terrainHeight(wp - vec2(0.7, 0.0))) + abs(terrainHeight(wp + vec2(0.0, 0.7)) - terrainHeight(wp - vec2(0.0, 0.7)));
         vFade *= 1.0 - smoothstep(0.5, 1.0, slope);
         float flower = step(0.96, rand) * smoothstep(5.0, 8.0, length(wp - uCam));
-        float h = (0.18 + rand * 0.24) * vFade * mix(1.0, 0.75, flower);
+        // short fringe: the meadow surface carries the look; blades only roughen edges and the rim
+        float h = (0.08 + rand * 0.14) * vFade * mix(1.0, 0.75, flower);
         // wide blades: after the cluster filter they read as painted strokes, not single leaves
         float w = 0.1 + rand * 0.06;
         vec3 p = vec3(position.x * w * (1.0 + flower * step(0.6, position.y) * 1.5), position.y * h, 0.0);
@@ -81,11 +82,11 @@ export function buildGrass(count: number) {
       ${GLSL_FOG}
       void main() {
         if (vFade < 0.02) discard;
-        vec3 root = vec3(0.012, 0.035, 0.014);
-        vec3 tip = mix(vec3(0.05, 0.13, 0.04), vec3(0.11, 0.20, 0.05), vRand);
+        vec3 root = vec3(0.04, 0.1, 0.02);
+        vec3 tip = mix(vec3(0.12, 0.26, 0.04), vec3(0.24, 0.42, 0.06), vRand);
         // patches of sunlit tips (yellow-green), clustered by world position
         float sunlit = smoothstep(0.55, 0.8, fract(sin(dot(floor(vPatch), vec2(12.9898, 78.233))) * 43758.5453));
-        tip = mix(tip, vec3(0.42, 0.55, 0.16), sunlit * vT * vT);
+        tip = mix(tip, vec3(0.55, 0.69, 0.15), sunlit * vT * vT);
         vec3 col = mix(root, tip, vT);
         float sun = max(uSunDir.y, 0.0) * 1.25 + 0.35;
         col *= sun;

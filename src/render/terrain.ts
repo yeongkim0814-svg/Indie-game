@@ -53,17 +53,17 @@ export function buildTerrain(segments = 300): THREE.Object3D {
     colors.set([c.r, c.g, c.b], i * 3);
   }
   geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  group.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true })));
+  group.add(new THREE.Mesh(geo, meadowMaterial()));
 
   const water = new THREE.Mesh(
     new THREE.PlaneGeometry(1800, 1800).rotateX(-Math.PI / 2),
     // unlit: the river reads as a bright band of reflected sky
-    new THREE.MeshBasicMaterial({ color: new THREE.Color("#d6ecf7").multiplyScalar(1.15) }),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color("#8fc6ea") }),
   );
   water.position.y = WATER_LEVEL;
   group.add(water);
 
-  group.add(buildMountains(560, 860, 0.0042, 0.75, 7), buildMountains(950, 1500, 0.0028, 1.35, 3));
+  group.add(buildMountains(560, 860, 0.0042, 0.32, 7), buildMountains(950, 1500, 0.0028, 0.9, 3));
 
   const rock = new THREE.MeshLambertMaterial({ color: "#3a4c5c" });
   for (const p of PILLARS) {
@@ -74,6 +74,46 @@ export function buildTerrain(segments = 300): THREE.Object3D {
     group.add(body);
   }
   return group;
+}
+
+/**
+ * Ground material: on grassy (green) vertices, replace the flat color with a mottled
+ * meadow — multi-scale patches from dark green to sunlit yellow-green — plus white
+ * flower specks on a world grid. Perspective squashes the patches into horizontal
+ * bands, which is how the reference grass reads.
+ */
+function meadowMaterial(): THREE.MeshLambertMaterial {
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  mat.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace("#include <common>", "#include <common>\nvarying vec3 vWPos;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+    sh.fragmentShader = sh.fragmentShader
+      .replace("#include <common>", `#include <common>
+varying vec3 vWPos;
+float mh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float mn(vec2 p) {
+  vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mh(i), mh(i + vec2(1, 0)), u.x), mix(mh(i + vec2(0, 1)), mh(i + vec2(1, 1)), u.x), u.y);
+}`)
+      .replace("#include <color_fragment>", `#include <color_fragment>
+{
+  vec3 vc = vColor.rgb;
+  float grassy = smoothstep(0.0, 0.04, vc.g - max(vc.r, vc.b) * 1.05) * step(-12.0, vWPos.y);
+  vec2 q = vWPos.xz;
+  float n = mn(q * 0.07) * 0.45 + mn(q * 0.23 + 7.1) * 0.35 + mn(q * 0.9 - 3.3) * 0.2;
+  // sRGB ramp → linear: dark green, mid, sunlit, yellow highlight
+  vec3 c0 = vec3(0.022, 0.063, 0.012), c1 = vec3(0.078, 0.19, 0.024), c2 = vec3(0.26, 0.45, 0.06), c3 = vec3(0.55, 0.69, 0.15);
+  vec3 g = n < 0.4 ? mix(c0, c1, smoothstep(0.25, 0.4, n)) : n < 0.6 ? mix(c1, c2, smoothstep(0.42, 0.6, n)) : mix(c2, c3, smoothstep(0.62, 0.8, n));
+  // flowers: one speck in some cells of a 0.45 m grid, only near the camera
+  vec2 cell = floor(q / 0.45);
+  vec2 f = fract(q / 0.45) - 0.5 - (vec2(mh(cell + 3.7), mh(cell + 9.1)) - 0.5) * 0.5;
+  float flower = step(0.9, mh(cell)) * step(length(f), 0.2) * step(0.45, n) * (1.0 - smoothstep(30.0, 45.0, length(vViewPosition)));
+  g = mix(g, vec3(0.95), flower);
+  diffuseColor.rgb = mix(diffuseColor.rgb, g, grassy);
+}`);
+  };
+  return mat;
 }
 
 /** A ring of ridged mountains between radius r0 and r1, lit by the sun so ridges get a light and a shadow side. */

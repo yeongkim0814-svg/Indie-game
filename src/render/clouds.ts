@@ -50,7 +50,7 @@ export function buildClouds(): THREE.Mesh {
   // Cloud walls framing the monolith valley ahead, plus some all around for 360° openness.
   // Towers framing the view from the rim (+x), plus a ring for 360° openness.
   const towers: [number, number, number, number][] = [
-    [820, 330, 220, 300], [380, -380, 170, 280], [700, -330, 200, 280], [360, 430, 180, 260], [900, 20, 160, 140],
+    [900, 120, 360, 420], [520, -420, 180, 300], [760, -360, 220, 320], [420, 470, 200, 280],
     [720, 300, 200, 280], [-420, -260, 160, 220], [-480, 200, 150, 200], [60, 520, 170, 220],
     [80, -620, 200, 260], [-150, 700, 220, 260],
   ];
@@ -75,8 +75,8 @@ export function buildClouds(): THREE.Mesh {
     uniforms: {
       uSunDir: { value: SUN_DIR },
       uHorizon: { value: SKY.horizon },
-      uLit: { value: new THREE.Color("#ffffff").multiplyScalar(1.6) },
-      uShadow: { value: new THREE.Color("#6f97bd") },
+      uLit: { value: new THREE.Color("#ffffff").multiplyScalar(1.8) },
+      uShadow: { value: new THREE.Color("#5680b6") },
       uFog: { value: CLOUD_FOG_DENSITY },
     },
     vertexShader: /* glsl */ `
@@ -117,10 +117,12 @@ export function buildClouds(): THREE.Mesh {
         float z = sqrt(max(1.0 - d * d, 0.0));
         // lumpy normal: breaks smooth sphere shading into cauliflower clusters
         vec2 lump = vec2(noise(p * 4.0 + vSeed * 31.0), noise(p * 4.0 - vSeed * 23.0)) - 0.5;
-        vec3 n = normalize(vec3(p + lump * 0.9, z));
+        vec3 n = normalize(vec3(p + lump * 0.55, z));
         vec3 sunView = normalize((viewMatrix * vec4(uSunDir, 0.0)).xyz);
-        float wrap = clamp(dot(n, sunView) * 0.6 + 0.45, 0.0, 1.0);
-        float lit = wrap * mix(0.45, 1.0, vShade);
+        // mostly white; blue shadow gathers on the underside and the side away from the sun
+        float wrap = clamp(dot(n, sunView) * 0.5 + 0.62, 0.0, 1.0);
+        float under = smoothstep(0.35, -0.6, n.y + (vShade - 0.4));
+        float lit = wrap * (1.0 - 0.55 * under);
         vec3 col = mix(uShadow, uLit, smoothstep(0.15, 0.95, lit));
         // silver lining where the sun sits behind the puff
         float back = max(-sunView.z, 0.0);

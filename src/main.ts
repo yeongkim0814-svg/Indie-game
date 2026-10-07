@@ -41,7 +41,7 @@ scene.add(grass.mesh);
 const sim = new GameSim();
 const input = createInput(document.body);
 input.yaw = SPAWN.yaw;
-input.pitch = -0.24; // look slightly down so the camera rises above the rim and sees the valley
+input.pitch = 0.12; // slightly up: sky fills ~60% of the frame, as in the references
 const updateHud = createHud(document.body);
 
 const player = new THREE.Group();
@@ -74,8 +74,8 @@ function puff(x: number, y: number, z: number, color: number, size: number) {
   puffs.push({ mesh, life: 0.35 });
 }
 
-// pixel-size toggle (comparison): x4 → x6 → x3 → smooth
-const PX_STEPS = [4, 6, 3, 1];
+// pixel-size toggle (comparison): x6 → x4 → x8 → smooth
+const PX_STEPS = [6, 4, 8, 1];
 const pxBtn = document.createElement("button");
 pxBtn.id = "btn-px";
 pxBtn.style.cssText = "position:fixed;right:max(12px,env(safe-area-inset-right));top:max(40px,env(safe-area-inset-top));z-index:5;" +
@@ -169,14 +169,18 @@ function frame(now: number) {
     if (f.life <= 0) { scene.remove(f.mesh); f.mesh.geometry.dispose(); (f.mesh.material as THREE.Material).dispose(); puffs.splice(i, 1); }
   }
 
-  // third-person camera, slightly over the shoulder and a bit low so giants loom
+  // third-person camera, far back so the wanderer stays small against the world
   const eye = new THREE.Vector3(p.x, p.y + 1.3, p.z);
   const right = new THREE.Vector3(Math.cos(input.yaw), 0, -Math.sin(input.yaw));
-  // pulled far back so the wanderer stays small against the world
-  const cam = eye.clone().addScaledVector(aimDir, -11).addScaledVector(right, 0.9);
+  // Camera rides ~3 m above the wanderer regardless of pitch, so it clears the rim and sees
+  // into the valley while still looking level or up (big sky, low horizon).
+  const horiz = new THREE.Vector3(aimDir.x, 0, aimDir.z).normalize();
+  const lift = 3 - Math.sin(input.pitch) * 6.6;
+  const cam = eye.clone().addScaledVector(horiz, -11 * Math.cos(input.pitch)).addScaledVector(right, 0.9);
+  cam.y += lift;
   cam.y = Math.max(cam.y, sim.player.pos.y - 0.6, heightAt(cam.x, cam.z) + 1.1);
   camera.position.copy(cam);
-  camera.lookAt(eye.clone().addScaledVector(aimDir, 14).addScaledVector(right, 0.9));
+  camera.lookAt(eye.clone().addScaledVector(aimDir, 14).addScaledVector(right, 0.9).add(new THREE.Vector3(0, 3, 0)));
   sky.position.copy(camera.position);
 
   grass.uniforms.uTime.value = time;

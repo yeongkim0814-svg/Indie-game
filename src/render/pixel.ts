@@ -24,6 +24,8 @@ export function createPixelPipeline(renderer: THREE.WebGLRenderer) {
     uNear: { value: 0.5 },
     uFar: { value: 3200 },
     uStyle: { value: 1 },
+    /** cluster radius near the camera, in low-res texels (bigger pixels need a smaller radius) */
+    uRMax: { value: 2 },
   };
   const post = new THREE.Mesh(
     new THREE.PlaneGeometry(2, 2),
@@ -35,7 +37,7 @@ export function createPixelPipeline(renderer: THREE.WebGLRenderer) {
       fragmentShader: /* glsl */ `
         uniform sampler2D tScene, tDepth;
         uniform vec2 uTexel;
-        uniform float uNear, uFar, uStyle;
+        uniform float uNear, uFar, uStyle, uRMax;
         varying vec2 vUv;
         vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
         vec3 toSrgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
@@ -73,7 +75,8 @@ export function createPixelPipeline(renderer: THREE.WebGLRenderer) {
           vec3 c;
           if (uStyle > 0.5) {
             float dist = linearDepth(texture2D(tDepth, vUv).r);
-            int r = dist < 30.0 ? 3 : dist < 140.0 ? 2 : 1;
+            int rmax = int(uRMax);
+            int r = dist < 30.0 ? rmax : dist < 140.0 ? max(rmax - 1, 1) : 1;
             c = kuwahara(vUv, r);
             // keep isolated bright specks (flowers, glints) that the cluster filter would average away
             vec3 center = texture2D(tScene, vUv).rgb;
@@ -104,7 +107,7 @@ export function createPixelPipeline(renderer: THREE.WebGLRenderer) {
   postScene.add(post);
   const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
-  let scale = 4;
+  let scale = 6;
   function resize() {
     const dpr = Math.min(window.devicePixelRatio, 3);
     const w = window.innerWidth, h = window.innerHeight;
@@ -114,6 +117,7 @@ export function createPixelPipeline(renderer: THREE.WebGLRenderer) {
     target.setSize(tw, th);
     uniforms.uTexel.value.set(1 / tw, 1 / th);
     uniforms.uStyle.value = scale === 1 ? 0 : 1;
+    uniforms.uRMax.value = scale >= 6 ? 2 : 3;
     renderer.setPixelRatio(1);
     renderer.setSize(w, h, false);
     return { tw, th };

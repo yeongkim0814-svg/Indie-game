@@ -4,7 +4,7 @@ import * as THREE from "three";
 export const SUN_DIR = new THREE.Vector3(0.2, 0.62, 0.76).normalize();
 
 export const SKY = {
-  zenith: new THREE.Color("#2a68b8"),
+  zenith: new THREE.Color("#2e6fc4"),
   /** cyan haze (~195°), not gray-white: distance reads as air */
   horizon: new THREE.Color("#a3cfe3"),
   sun: new THREE.Color("#fff4dc"),
@@ -13,7 +13,7 @@ export const SKY = {
 /** Aerial perspective: color = obj·e^(−βd) + horizon·(1−e^(−βd)). */
 export const FOG_DENSITY = 0.0022;
 /** Clouds are much larger and farther; they get a lighter β so they keep their shape. */
-export const CLOUD_FOG_DENSITY = 0.0011;
+export const CLOUD_FOG_DENSITY = 0.0005;
 
 /** GLSL twin of world.ts terrainHeight — keep both in sync. */
 export const GLSL_TERRAIN = /* glsl */ `
