@@ -53,6 +53,8 @@ export function buildGrass(count: number) {
         float dist = length(off);
         vFade = (1.0 - smoothstep(uTile * 0.32, uTile * 0.5, dist)) * smoothstep(1.5, 4.0, length(wp - uCam));
         float rand = aInst.z, rot = aInst.w * 6.2831;
+        float slope = abs(terrainHeight(wp + vec2(0.7, 0.0)) - terrainHeight(wp - vec2(0.7, 0.0))) + abs(terrainHeight(wp + vec2(0.0, 0.7)) - terrainHeight(wp - vec2(0.0, 0.7)));
+        vFade *= 1.0 - smoothstep(0.5, 1.0, slope);
         float h = (0.22 + rand * 0.33) * vFade;
         float w = 0.05 + rand * 0.03;
         vec3 p = vec3(position.x * w, position.y * h, 0.0);

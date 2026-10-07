@@ -12,6 +12,8 @@ import { buildWanderer } from "./render/wanderer";
 import { createPixelPipeline } from "./render/pixel";
 import { FOG_DENSITY, SKY, SUN_DIR } from "./render/atmosphere";
 
+// ?lite: cheap scene for headless checks (software GL runs at ~1 fps otherwise)
+const LITE = new URLSearchParams(location.search).has("lite");
 const canvas = document.createElement("canvas");
 document.body.prepend(canvas);
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance" });
@@ -27,17 +29,17 @@ scene.add(sun);
 
 const sky = buildSky();
 const clouds = buildClouds();
-scene.add(sky, clouds, buildTerrain());
+scene.add(sky, clouds, buildTerrain(LITE ? 90 : 300));
 
 // Capture sky + clouds once so the monoliths mirror them.
-const cubeRT = new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType });
+const cubeRT = new THREE.WebGLCubeRenderTarget(LITE ? 32 : 256, { type: THREE.HalfFloatType });
 const cubeCam = new THREE.CubeCamera(1, 3000, cubeRT);
 cubeCam.position.set(0, 120, -200);
 scene.add(cubeCam);
 cubeCam.update(renderer, scene);
 scene.add(buildMonoliths(cubeRT.texture));
 
-const grass = buildGrass(40000);
+const grass = buildGrass(LITE ? 3000 : 40000);
 scene.add(grass.mesh);
 
 const sim = new GameSim();
@@ -74,8 +76,8 @@ function puff(x: number, y: number, z: number, color: number, size: number) {
   puffs.push({ mesh, life: 0.35 });
 }
 
-// pixel-size toggle (comparison): x3 → x4 → x2 → smooth
-const PX_STEPS = [3, 4, 2, 1];
+// pixel-size toggle (comparison): x4 → x6 → x3 → smooth
+const PX_STEPS = [4, 6, 3, 1];
 const pxBtn = document.createElement("button");
 pxBtn.id = "btn-px";
 pxBtn.style.cssText = "position:fixed;right:max(12px,env(safe-area-inset-right));top:max(40px,env(safe-area-inset-top));z-index:5;" +
@@ -170,12 +172,13 @@ function frame(now: number) {
   }
 
   // third-person camera, slightly over the shoulder and a bit low so giants loom
-  const eye = new THREE.Vector3(p.x, p.y + 1.4, p.z);
+  const eye = new THREE.Vector3(p.x, p.y + 1.3, p.z);
   const right = new THREE.Vector3(Math.cos(input.yaw), 0, -Math.sin(input.yaw));
-  const cam = eye.clone().addScaledVector(aimDir, -6.5).addScaledVector(right, 0.6);
+  // pulled far back so the wanderer stays small against the world
+  const cam = eye.clone().addScaledVector(aimDir, -11).addScaledVector(right, 0.9);
   cam.y = Math.max(cam.y, sim.player.pos.y - 0.6, heightAt(cam.x, cam.z) + 1.1);
   camera.position.copy(cam);
-  camera.lookAt(eye.clone().addScaledVector(aimDir, 14).addScaledVector(right, 0.6));
+  camera.lookAt(eye.clone().addScaledVector(aimDir, 14).addScaledVector(right, 0.9));
   sky.position.copy(camera.position);
 
   grass.uniforms.uTime.value = time;
@@ -191,7 +194,7 @@ function frame(now: number) {
   }
   updateHud(sim, fps);
   const w = window as unknown as Record<string, unknown>;
-  w.__fps = fps; w.__ready = true;
+  w.__fps = fps; w.__ready = true; w.__frame = ((w.__frame as number) ?? 0) + 1;
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

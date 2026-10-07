@@ -10,7 +10,27 @@ export interface Pillar {
 
 /** Rolling hills (same function used to build the visual mesh). */
 export function terrainHeight(x: number, z: number): number {
-  return Math.sin(x * 0.05) * 3 + Math.cos(z * 0.04) * 3 + Math.sin((x + z) * 0.11) * 1.2;
+  const plateau = Math.sin(x * 0.05) * 3 + Math.cos(z * 0.04) * 3 + Math.sin((x + z) * 0.11) * 1.2;
+  // Plateau = irregular ellipse; beyond its rim a cliff drops into the valley.
+  const ex = x / PLATEAU.rx, ez = (z - PLATEAU.cz) / PLATEAU.rz;
+  const a = Math.atan2(ez, ex);
+  const k = Math.hypot(ex, ez) + 0.07 * Math.sin(a * 5 + 1.3) + 0.04 * Math.sin(a * 13);
+  const t = smooth(1, 1.16, k);
+  if (t <= 0) return plateau;
+  const river = 70 + 140 * Math.sin(z * 0.004) + 40 * Math.sin(z * 0.011);
+  const carve = 5 * (1 - smooth(10, 30, Math.abs(x - river)));
+  const valley = VALLEY_FLOOR + 3 * Math.sin(x * 0.02) * Math.cos(z * 0.017) - carve;
+  return plateau + (valley - plateau) * t;
+}
+
+/** Plateau the player starts on; keep in sync with GLSL_TERRAIN. */
+export const PLATEAU = { rx: 95, rz: 115, cz: -20 };
+export const VALLEY_FLOOR = -72;
+export const WATER_LEVEL = -74.5;
+
+function smooth(e0: number, e1: number, x: number) {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
 }
 
 export const SPAWN = { x: 0, z: 0 };

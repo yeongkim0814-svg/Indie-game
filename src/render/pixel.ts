@@ -1,5 +1,13 @@
 import * as THREE from "three";
 
+/** Restrained palette (sRGB): sky blues, cyan, cloud whites, muted greens, gray-blue rock. */
+export const PALETTE = [
+  "#14306e", "#1d4593", "#2a5fb8", "#3f7fd6", "#6ea6e6", "#a6cdf2", "#d8ecfa", "#ffffff",
+  "#c5d6ea", "#8fb0d6", "#6c8fbf", "#4f6fa3",
+  "#0d220f", "#173a16", "#24561d", "#357227", "#4e8c2c", "#73a83a", "#a2c45a", "#cbd98a",
+  "#161a24", "#2b3240", "#46505f", "#6b7788", "#97a5b6",
+];
+
 /**
  * Renders the 3D scene into a low-resolution HDR target, then upscales with
  * nearest filtering: tone map → sRGB → ordered dither → limited color levels.
@@ -17,6 +25,7 @@ export function createPixelPipeline(renderer: THREE.WebGLRenderer) {
     uRes: { value: new THREE.Vector2(1, 1) },
     uLevels: { value: 20 },
     uDither: { value: 1 },
+    uPalette: { value: PALETTE.map((h) => new THREE.Color(h).convertLinearToSRGB()) },
   };
   const post = new THREE.Mesh(
     new THREE.PlaneGeometry(2, 2),
@@ -29,6 +38,7 @@ export function createPixelPipeline(renderer: THREE.WebGLRenderer) {
         uniform sampler2D tScene;
         uniform vec2 uRes;
         uniform float uLevels, uDither;
+        uniform vec3 uPalette[${PALETTE.length}];
         varying vec2 vUv;
         vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
         vec3 toSrgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
@@ -43,8 +53,16 @@ export function createPixelPipeline(renderer: THREE.WebGLRenderer) {
           c = toSrgb(aces(c * 0.9));
           if (uLevels > 0.0) {
             vec2 px = floor(vUv * uRes);
-            c += bayer4(px) * uDither / uLevels;
-            c = floor(c * uLevels + 0.5) / uLevels;
+            c += bayer4(px) * uDither * 0.05;
+            // nearest palette color; extra luminance weight keeps light/shadow steps readable
+            vec3 best = uPalette[0]; float bd = 1e9;
+            for (int i = 0; i < ${PALETTE.length}; i++) {
+              vec3 d = c - uPalette[i];
+              float l = dot(d, vec3(0.30, 0.59, 0.11));
+              float dist = dot(d, d) + 0.6 * l * l;
+              if (dist < bd) { bd = dist; best = uPalette[i]; }
+            }
+            c = best;
           }
           gl_FragColor = vec4(c, 1.0);
         }`,
@@ -55,7 +73,7 @@ export function createPixelPipeline(renderer: THREE.WebGLRenderer) {
   postScene.add(post);
   const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
-  let scale = 3;
+  let scale = 4;
   function resize() {
     const dpr = Math.min(window.devicePixelRatio, 3);
     const w = window.innerWidth, h = window.innerHeight;

@@ -39,10 +39,10 @@ export function buildClouds(): THREE.Mesh {
     [-480, -60, 150, 180], [500, 80, 140, 200], [-200, 420, 160, 170], [260, 460, 150, 210],
     [60, -760, 220, 300], [-620, -500, 200, 240],
   ];
-  for (const [x, z, w, h] of towers) cumulus(puffs, x, z, 10 + rand() * 30, w, h, rand);
+  for (const [x, z, w, h] of towers) cumulus(puffs, x, z, -40 + rand() * 30, w, h, rand);
   for (let i = 0; i < 14; i++) {
     const a = (i / 14) * Math.PI * 2 + rand() * 0.2, d = 820 + rand() * 200;
-    stratus(puffs, Math.cos(a) * d, Math.sin(a) * d, -10 + rand() * 20, 260, rand);
+    stratus(puffs, Math.cos(a) * d, Math.sin(a) * d, -55 + rand() * 20, 260, rand);
   }
 
   const quad = new THREE.PlaneGeometry(2, 2);
@@ -104,7 +104,12 @@ export function buildClouds(): THREE.Mesh {
         vec3 sunView = normalize((viewMatrix * vec4(uSunDir, 0.0)).xyz);
         float wrap = clamp(dot(n, sunView) * 0.6 + 0.45, 0.0, 1.0);
         float lit = wrap * mix(0.55, 1.0, vShade);
+        // hard light bands: clouds read as stacked pixel clusters, not airbrush
+        lit = floor(lit * 4.0 + 0.5) / 4.0;
         vec3 col = mix(uShadow, uLit, smoothstep(0.1, 0.95, lit));
+        // silver lining where the sun sits behind the puff
+        float back = max(-sunView.z, 0.0);
+        col += uLit * 0.35 * back * smoothstep(0.82, 0.97, d);
         // spherical impostor depth so puffs intersect as volumes, not flat cards
         vec3 vp = vec3(vView.xy, vView.z + z * vR);
         vec4 clip = projectionMatrix * vec4(vp, 1.0);
