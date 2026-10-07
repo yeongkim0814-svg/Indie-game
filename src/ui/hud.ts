@@ -9,7 +9,8 @@ export function createHud(root: HTMLElement) {
     <div id="energy"><div id="e-fill"></div><div id="e-cost"></div></div>
     <div id="info"></div>
     <div id="toast"></div>
-    <div id="cross"></div>`;
+    <div id="cross"></div>
+    <div id="lookhint">▼ 점프 = 반동 점프</div>`;
   root.appendChild(el);
   const style = document.createElement("style");
   style.textContent = `
@@ -20,16 +21,20 @@ export function createHud(root: HTMLElement) {
     #e-cost { position: absolute; inset: 0 auto 0 0; background: rgba(255,80,80,.65); }
     #info { position: absolute; left: 12px; top: 40px; white-space: pre; }
     #toast { position: absolute; left: 50%; top: 30%; transform: translateX(-50%); font-size: 22px; font-weight: 700; opacity: 0; transition: opacity .4s; text-align: center; }
+    #lookhint { position: absolute; left: 50%; top: calc(50% + 24px); transform: translateX(-50%); display: none; padding: 3px 10px; border-radius: 12px;
+      background: rgba(255,210,94,.85); color: #1b2238; font-weight: 700; text-shadow: none; }
     #cross { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 2px solid rgba(255,255,255,.8); border-radius: 50%; }`;
   document.head.appendChild(style);
 
   const fill = el.querySelector<HTMLElement>("#e-fill")!;
   const cost = el.querySelector<HTMLElement>("#e-cost")!;
   const info = el.querySelector<HTMLElement>("#info")!;
+  const lookhint = el.querySelector<HTMLElement>("#lookhint")!;
   const toast = el.querySelector<HTMLElement>("#toast")!;
   let toastShown = false;
 
   return (sim: GameSim, fps: number) => {
+    lookhint.style.display = sim.lookingDown ? "block" : "none";
     fill.style.width = `${sim.energy.fraction * 100}%`;
     // red segment: energy the pending shot would consume
     const c = sim.charging ? sim.predictedCost(Math.max(sim.charge, 0.3)) : 0;

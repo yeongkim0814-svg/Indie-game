@@ -8,7 +8,7 @@ npm install
 npm run dev          # 로컬 개발 서버 (폰에서 같은 네트워크로 접속 가능)
 npm test             # 물리 단위 테스트(Vitest)
 npm run build        # 타입체크 + 빌드
-npm run check:webgl  # 헤드리스 Chromium으로 WebGL 렌더/오류 확인, screenshots/m0.png 생성
+npm run check:webgl  # 헤드리스 Chromium으로 WebGL, 조작 시나리오 확인, screenshots/ 생성
 ```
 
 ## 조작 (M1)
@@ -17,7 +17,9 @@ npm run check:webgl  # 헤드리스 Chromium으로 WebGL 렌더/오류 확인, s
 | 이동 | 화면 왼쪽 드래그(끝까지 밀면 달리기) | WASD, Shift |
 | 조준 | 화면 오른쪽 드래그 | 방향키 / 마우스 드래그 |
 | 발사 | 발사 버튼 꾹 눌러 차지 → 떼면 발사 | F |
-| 점프 | 점프 버튼 | Space |
+| 점프 ① 다리 점프 | 점프 버튼 | Space |
+| 점프 ② 반동 점프 | 반동 점프 버튼: 조이스틱이 향한 방향으로 날아감(조이스틱을 놓으면 수직) | E |
+| 점프 ③ 바닥 보고 점프 | 시선을 바닥으로 숙인 뒤 점프 버튼: 시선 방향으로 발사해 뜸 | 아래를 본 뒤 Space |
 | 탄 교체 | 탄 교체 버튼 | Q |
 
 반동은 발사 방향의 반대입니다. 아래로 쏘면 위로 뜹니다. 정상(가장 먼 기둥)까지 올라가 보세요.

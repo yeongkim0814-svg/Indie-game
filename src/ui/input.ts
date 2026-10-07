@@ -5,6 +5,7 @@ export interface InputState {
   moveY: number;
   run: boolean;
   jumpHeld: boolean;
+  launchJumpHeld: boolean;
   fireHeld: boolean;
   switchPressed: boolean;
   /** Stick was released while pushed hard forward: keep sprinting forward until the stick is touched again. */
@@ -18,7 +19,7 @@ const PITCH_MIN = -1.5, PITCH_MAX = 0.9;
 
 export function createInput(root: HTMLElement): InputState {
   const s: InputState = {
-    moveX: 0, moveY: 0, run: false, jumpHeld: false, fireHeld: false, switchPressed: false, sprintLock: false, yaw: 0, pitch: -0.25,
+    moveX: 0, moveY: 0, run: false, jumpHeld: false, launchJumpHeld: false, fireHeld: false, switchPressed: false, sprintLock: false, yaw: 0, pitch: -0.25,
   };
 
   // ---- on-screen controls ----
@@ -29,6 +30,7 @@ export function createInput(root: HTMLElement): InputState {
     <div id="sprintbadge">자동 달리기 ▲<small>조이스틱을 터치하면 해제</small></div>
     <button class="btn" id="btn-slug">탄 교체</button>
     <button class="btn" id="btn-jump">점프</button>
+    <button class="btn" id="btn-lj">반동<br>점프</button>
     <button class="btn" id="btn-fire">발사<br><small>꾹 눌러 차지</small></button>`;
   root.appendChild(ui);
   const style = document.createElement("style");
@@ -41,6 +43,7 @@ export function createInput(root: HTMLElement): InputState {
     .btn.on { background: rgba(255,210,94,.6); }
     #btn-fire { right: max(18px, env(safe-area-inset-right)); bottom: max(34px, env(safe-area-inset-bottom)); width: 104px; height: 104px; }
     #btn-jump { right: 138px; bottom: 28px; width: 76px; height: 76px; }
+    #btn-lj { right: 128px; bottom: 114px; width: 66px; height: 66px; font-size: 12px; }
     #btn-slug { right: 30px; bottom: 156px; width: 64px; height: 64px; font-size: 12px; }
     #stick { position: absolute; width: 120px; height: 120px; border-radius: 50%; border: 2px solid rgba(255,255,255,.4);
       background: rgba(255,255,255,.08); display: none; }
@@ -70,6 +73,7 @@ export function createInput(root: HTMLElement): InputState {
   };
   bind("#btn-fire", () => (s.fireHeld = true), () => (s.fireHeld = false));
   bind("#btn-jump", () => (s.jumpHeld = true), () => (s.jumpHeld = false));
+  bind("#btn-lj", () => (s.launchJumpHeld = true), () => (s.launchJumpHeld = false));
   bind("#btn-slug", () => (s.switchPressed = true), () => (s.switchPressed = false));
 
   // ---- free touch: left half = stick, right half = aim drag ----
@@ -129,6 +133,7 @@ export function createInput(root: HTMLElement): InputState {
     s.moveY = (keys.has("KeyW") ? 1 : 0) - (keys.has("KeyS") ? 1 : 0);
     s.run = keys.has("ShiftLeft") || keys.has("ShiftRight");
     s.jumpHeld = keys.has("Space");
+    s.launchJumpHeld = keys.has("KeyE");
     s.fireHeld = keys.has("KeyF");
     s.switchPressed = keys.has("KeyQ");
     const turn = (keys.has("ArrowLeft") ? 1 : 0) - (keys.has("ArrowRight") ? 1 : 0);

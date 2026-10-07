@@ -1,5 +1,6 @@
 import {
-  CHARGE_TIME, CRATE_FRICTION, CRATE_MASS, FIRE_COOLDOWN, G, MIN_CHARGE, SHOOTER_MASS, SLUGS, SLUG_LIFETIME,
+  CHARGE_TIME, CRATE_FRICTION, CRATE_MASS, FIRE_COOLDOWN, G, LAUNCH_JUMP_CHARGE, LAUNCH_JUMP_ELEVATION,
+  LAUNCH_JUMP_SLUG, LAUNCH_JUMP_STICK_MIN, LOOK_DOWN_PITCH, MIN_CHARGE, SHOOTER_MASS, SLUGS, SLUG_LIFETIME,
   SLUG_ORDER, type SlugId,
 } from "./config";
 import { EnergyGauge } from "./energy";
@@ -27,6 +28,8 @@ export interface ImpactEvent {
 }
 
 export interface SimInput extends MoveInput {
+  /** Edge: launcher jump toward the stick direction (jump method 2). */
+  launchJump: boolean;
   fireHeld: boolean;
   switchSlug: boolean;
   /** Aim direction (unit) for firing; derived from camera by the caller. */
@@ -34,7 +37,7 @@ export interface SimInput extends MoveInput {
 }
 
 export const idleInput = (): SimInput => ({
-  moveX: 0, moveY: 0, run: false, jump: false, yaw: 0, fireHeld: false, switchSlug: false, aim: { x: 0, y: 0, z: -1 },
+  moveX: 0, moveY: 0, run: false, jump: false, yaw: 0, launchJump: false, fireHeld: false, switchSlug: false, aim: { x: 0, y: 0, z: -1 },
 });
 
 export class GameSim {
@@ -74,21 +77,45 @@ export class GameSim {
     return slugEnergy(t.mass, this.muzzleSpeed(charge));
   }
 
-  fire(dir: Vec3, charge: number): boolean {
+  fire(dir: Vec3, charge: number, slugId: SlugId = this.slugId): boolean {
     if (this.cooldown > 0) return false;
-    const t = SLUGS[this.slugId];
-    const speed = this.muzzleSpeed(charge);
+    const t = SLUGS[slugId];
+    const speed = this.muzzleSpeed(charge, slugId);
     if (speed < t.minSpeed * 0.6) return false; // out of energy
     this.energy.spend(slugEnergy(t.mass, speed));
     this.player.addVelocity(recoilDeltaV(SHOOTER_MASS, t.mass, speed, dir));
     const muzzle = { x: this.player.pos.x + dir.x, y: this.player.pos.y + 1.3 + dir.y, z: this.player.pos.z + dir.z };
     this.slugs.push({
-      pos: muzzle, vel: { x: dir.x * speed, y: dir.y * speed, z: dir.z * speed }, type: this.slugId, age: 0,
+      pos: muzzle, vel: { x: dir.x * speed, y: dir.y * speed, z: dir.z * speed }, type: slugId, age: 0,
     });
     this.events.push({ kind: "muzzle", pos: { ...muzzle } });
     this.cooldown = FIRE_COOLDOWN;
     this.shots++;
     return true;
+  }
+
+  /** True while the camera looks at the floor steeply enough that Jump means "launcher jump along the view". */
+  lookingDown = false;
+
+  /** Method 2: jump toward the stick direction by firing the opposite way. Straight up if the stick is idle. */
+  launchJumpToward(input: SimInput): boolean {
+    const mag = Math.hypot(input.moveX, input.moveY);
+    let jumpDir: Vec3 = { x: 0, y: 1, z: 0 };
+    if (mag >= LAUNCH_JUMP_STICK_MIN) {
+      const sy = Math.sin(input.yaw), cy = Math.cos(input.yaw);
+      let hx = input.moveX * cy - input.moveY * sy;
+      let hz = -input.moveX * sy - input.moveY * cy;
+      const hm = Math.hypot(hx, hz);
+      hx /= hm; hz /= hm;
+      const c = Math.cos(LAUNCH_JUMP_ELEVATION), sEl = Math.sin(LAUNCH_JUMP_ELEVATION);
+      jumpDir = { x: hx * c, y: sEl, z: hz * c };
+    }
+    return this.fire({ x: -jumpDir.x, y: -jumpDir.y, z: -jumpDir.z }, LAUNCH_JUMP_CHARGE, LAUNCH_JUMP_SLUG);
+  }
+
+  /** Method 3: with the view on the floor, the Jump button fires the launcher along the view. */
+  launchJumpAlongView(aim: Vec3): boolean {
+    return this.fire(aim, LAUNCH_JUMP_CHARGE, LAUNCH_JUMP_SLUG);
   }
 
   cycleSlug(): void {
@@ -110,7 +137,11 @@ export class GameSim {
     }
     this.wasFiring = input.fireHeld;
 
-    this.player.step(dt, input, heightAt);
+    this.lookingDown = input.aim.y <= Math.sin(LOOK_DOWN_PITCH);
+    let legJump = input.jump;
+    if (input.launchJump) this.launchJumpToward(input);
+    else if (input.jump && this.lookingDown && this.launchJumpAlongView(input.aim)) legJump = false;
+    this.player.step(dt, legJump === input.jump ? input : { ...input, jump: legJump }, heightAt);
     this.energy.step(dt, this.player.grounded);
     this.stepSlugs(dt);
     this.stepCrates(dt);

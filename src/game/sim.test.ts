@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { G, SHOOTER_MASS, SLUGS } from "./config";
+import { G, JUMP_SPEED, LAUNCH_JUMP_CHARGE, LAUNCH_JUMP_SLUG, SHOOTER_MASS, SLUGS } from "./config";
 import { GameSim, idleInput } from "./sim";
 import { PILLARS, SUMMIT, heightAt, terrainHeight } from "./world";
 import { PlayerBody } from "./player";
@@ -131,5 +131,85 @@ describe("reachability (bot)", () => {
     const rise = SUMMIT.top - terrainHeight(SUMMIT.x, SUMMIT.z);
     expect(sim.maxHeight - y0).toBeGreaterThan(rise);
     expect(sim.energy.value).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("three jump methods", () => {
+  const dvJump = (SLUGS[LAUNCH_JUMP_SLUG].mass * (SLUGS[LAUNCH_JUMP_SLUG].minSpeed + (SLUGS[LAUNCH_JUMP_SLUG].maxSpeed - SLUGS[LAUNCH_JUMP_SLUG].minSpeed) * LAUNCH_JUMP_CHARGE)) / SHOOTER_MASS;
+
+  it("1. leg jump: no energy used, no shot", () => {
+    const sim = new GameSim();
+    const inp = idleInput();
+    inp.jump = true;
+    sim.step(DT, inp);
+    expect(sim.shots).toBe(0);
+    expect(sim.energy.value).toBe(sim.energy.max);
+    expect(sim.player.vel.y).toBeGreaterThan(JUMP_SPEED - 0.5);
+  });
+
+  it("2. launcher jump with the stick forward launches forward and up (yaw 0 = -z), conserving momentum", () => {
+    const sim = new GameSim();
+    const inp = idleInput();
+    inp.moveY = 1;
+    inp.launchJump = true;
+    sim.step(DT, inp);
+    expect(sim.shots).toBe(1);
+    expect(sim.player.vel.z).toBeLessThan(-2);
+    expect(sim.player.vel.y).toBeGreaterThan(2);
+    const speed = Math.hypot(sim.player.vel.x, sim.player.vel.y, sim.player.vel.z);
+    expect(speed).toBeCloseTo(dvJump, 0);
+    const s = sim.slugs[0];
+    expect(SHOOTER_MASS * sim.player.vel.z + SLUGS.heavy.mass * s.vel.z).toBeCloseTo(0, 0);
+  });
+
+  it("2. launcher jump with the stick idle goes straight up; it follows camera yaw", () => {
+    const up = new GameSim();
+    const a = idleInput();
+    a.launchJump = true;
+    up.step(DT, a);
+    expect(Math.abs(up.player.vel.x)).toBeLessThan(1e-6);
+    expect(up.player.vel.y).toBeGreaterThan(dvJump * 0.95);
+
+    const turned = new GameSim();
+    const b = idleInput();
+    b.moveY = 1;
+    b.yaw = Math.PI / 2; // forward is now -x
+    b.launchJump = true;
+    turned.step(DT, b);
+    expect(turned.player.vel.x).toBeLessThan(-2);
+    expect(Math.abs(turned.player.vel.z)).toBeLessThan(0.1);
+  });
+
+  it("3. looking at the floor: the Jump button fires the launcher along the view instead of a leg jump", () => {
+    const sim = new GameSim();
+    const inp = idleInput();
+    inp.aim = { x: 0, y: -1, z: 0 };
+    inp.jump = true;
+    sim.step(DT, inp);
+    expect(sim.shots).toBe(1);
+    expect(sim.lookingDown).toBe(true);
+    expect(sim.player.vel.y).toBeGreaterThan(dvJump * 0.9);
+    expect(sim.player.vel.y).toBeLessThan(dvJump + 1); // launcher only: no leg jump on top
+  });
+
+  it("looking ahead, the Jump button stays a leg jump (no shot)", () => {
+    const sim = new GameSim();
+    const inp = idleInput();
+    inp.aim = { x: 0, y: -0.2, z: -1 };
+    inp.jump = true;
+    sim.step(DT, inp);
+    expect(sim.lookingDown).toBe(false);
+    expect(sim.shots).toBe(0);
+  });
+
+  it("looking at the floor without enough energy falls back to a leg jump", () => {
+    const sim = new GameSim();
+    sim.energy.value = 0;
+    const inp = idleInput();
+    inp.aim = { x: 0, y: -1, z: 0 };
+    inp.jump = true;
+    sim.step(DT, inp);
+    expect(sim.shots).toBe(0);
+    expect(sim.player.vel.y).toBeGreaterThan(JUMP_SPEED - 0.5);
   });
 });
