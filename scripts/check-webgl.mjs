@@ -19,14 +19,41 @@ try {
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   await page.goto(`http://localhost:${PORT}/`);
   await page.waitForFunction(() => window.__ready === true, null, { timeout: 15000 });
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(1000);
   const info = await page.evaluate(() => {
     const gl = document.createElement("canvas").getContext("webgl2");
     return { webgl2: !!gl, fps: window.__fps ?? null };
   });
   mkdirSync("screenshots", { recursive: true });
-  await page.screenshot({ path: "screenshots/m0.png" });
-  console.log(JSON.stringify({ ...info, errors }));
+  await page.screenshot({ path: "screenshots/m1-idle.png" });
+
+  // Scenario: aim straight down, jump, fire a charged heavy slug mid-air via the real UI buttons.
+  const y0 = await page.evaluate(() => window.__game.sim.player.pos.y);
+  await page.evaluate(() => { window.__game.input.pitch = -1.5; });
+  const jump = await page.locator("#btn-jump").boundingBox();
+  const fire = await page.locator("#btn-fire").boundingBox();
+  await page.mouse.move(jump.x + 30, jump.y + 30);
+  await page.mouse.down();
+  await page.waitForTimeout(120);
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+  await page.mouse.move(fire.x + 40, fire.y + 40);
+  await page.mouse.down(); // hold = charge
+  await page.waitForTimeout(250);
+  const before = await page.evaluate(() => ({ vy: window.__game.sim.player.vel.y, air: !window.__game.sim.player.grounded }));
+  await page.mouse.up();   // release = fire (mid-air, aimed straight down)
+  await page.waitForTimeout(60);
+  const vyAfter = await page.evaluate(() => window.__game.sim.player.vel.y);
+  await page.waitForTimeout(190);
+  await page.screenshot({ path: "screenshots/m1-recoil.png" });
+  const after = await page.evaluate(() => {
+    const g = window.__game.sim;
+    return { y: g.player.pos.y, vy: g.player.vel.y, shots: g.shots, energy: Math.round(g.energy.value), maxHeight: g.maxHeight };
+  });
+  info.scenario = { y0, ...after, airborneAtFire: before.air, vyBefore: +before.vy.toFixed(2), vyAfter: +vyAfter.toFixed(2) };
+  if (!before.air) errors.push("scenario: player was not airborne when firing (timing)");
+  else if (after.shots < 1 || vyAfter - before.vy < 2) errors.push("scenario: firing down did not add upward velocity");
+  console.log(JSON.stringify({ ...info, errors }, null, 1));
   if (!info.webgl2 || errors.length) code = 1;
 } catch (e) {
   console.error(e);
