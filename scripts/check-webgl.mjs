@@ -70,6 +70,22 @@ try {
   await settle();
   const y0 = await page.evaluate(() => window.__game.sim.player.pos.y);
 
+  // Fire and launcher jump never engage together: with Fire held, a launcher-jump press is ignored.
+  {
+    const fb = await page.locator("#btn-fire").boundingBox();
+    await page.mouse.move(fb.x + 40, fb.y + 40);
+    await page.mouse.down();
+    const blocked = await page.evaluate(() => {
+      document.querySelector("#btn-lj").dispatchEvent(new PointerEvent("pointerdown", { pointerId: 7, bubbles: true }));
+      return { fire: window.__game.input.fireHeld, lj: window.__game.input.launchJumpHeld };
+    });
+    await page.mouse.up();
+    await page.waitForTimeout(200);
+    if (!blocked.fire || blocked.lj) errors.push("fire + launcher jump engaged together: " + JSON.stringify(blocked));
+    info.exclusion = blocked;
+    await settle();
+  }
+
   // Jump method 3: view on the floor + Jump button => launcher jump along the view.
   await page.evaluate(() => { window.__game.input.pitch = -1.5; });
   await press("#btn-jump");

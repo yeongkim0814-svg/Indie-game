@@ -94,7 +94,6 @@ function aimFrom(yaw: number, pitch: number, out: THREE.Vector3) {
 
 const simInput: SimInput = idleInput();
 let jumpWasHeld = false;
-let launchWasHeld = false;
 let frames = 0, fpsClock = performance.now(), fps = 0;
 let last = performance.now(), acc = 0, tilt = 0;
 const FIXED = 1 / 120;
@@ -111,13 +110,11 @@ function frame(now: number) {
   const jumpEdge = input.jumpHeld && !jumpWasHeld;
   jumpWasHeld = input.jumpHeld;
   let jumpQueued = jumpEdge;
-  let launchQueued = input.launchJumpHeld && !launchWasHeld;
-  launchWasHeld = input.launchJumpHeld;
   while (acc >= FIXED) {
     simInput.jump = jumpQueued || (input.jumpHeld && sim.player.grounded && !sim.lookingDown);
     jumpQueued = false;
-    simInput.launchJump = launchQueued;
-    launchQueued = false;
+    simInput.launchJumpHeld = input.launchJumpHeld;
+    simInput.jumpHeld = input.jumpHeld;
     sim.step(FIXED, simInput);
     acc -= FIXED;
   }

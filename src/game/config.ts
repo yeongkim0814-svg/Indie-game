@@ -46,7 +46,9 @@ export const CRATE_FRICTION = 7;
 
 /** Launcher jump: always a heavy slug at this charge, so it is a reliable, energy-hungry jump. */
 export const LAUNCH_JUMP_SLUG: SlugId = "heavy";
-export const LAUNCH_JUMP_CHARGE = 0.9;
+/** Hold the launcher-jump button to charge: strength (= slug charge) goes from MIN (tap) to 1 (full hold) over JUMP_CHARGE_TIME. */
+export const LAUNCH_JUMP_CHARGE_MIN = 0.5;
+export const JUMP_CHARGE_TIME = 0.5;
 /**
  * Launcher-jump elevation (above horizontal) depends on how far the stick is pushed:
  * idle (< STICK_MIN) = straight up, full push / sprint = MIN elevation, linear in between.

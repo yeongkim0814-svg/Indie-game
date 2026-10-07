@@ -30,7 +30,7 @@ export function createInput(root: HTMLElement): InputState {
     <div id="sprintbadge">자동 달리기 ▲<small>조이스틱을 터치하면 해제</small></div>
     <button class="btn" id="btn-slug">탄 교체</button>
     <button class="btn" id="btn-jump">점프</button>
-    <button class="btn" id="btn-lj">반동<br>점프</button>
+    <button class="btn" id="btn-lj">반동<br>점프<br><small>꾹 눌러 강도</small></button>
     <button class="btn" id="btn-fire">발사<br><small>꾹 눌러 차지</small></button>`;
   root.appendChild(ui);
   const style = document.createElement("style");
@@ -43,7 +43,7 @@ export function createInput(root: HTMLElement): InputState {
     .btn.on { background: rgba(255,210,94,.6); }
     #btn-fire { right: max(18px, env(safe-area-inset-right)); bottom: max(34px, env(safe-area-inset-bottom)); width: 104px; height: 104px; }
     #btn-jump { right: 138px; bottom: 28px; width: 76px; height: 76px; }
-    #btn-lj { right: 128px; bottom: 114px; width: 66px; height: 66px; font-size: 12px; }
+    #btn-lj { right: 126px; bottom: 112px; width: 74px; height: 74px; font-size: 12px; line-height: 1.15; }
     #btn-slug { right: 30px; bottom: 156px; width: 64px; height: 64px; font-size: 12px; }
     #stick { position: absolute; width: 120px; height: 120px; border-radius: 50%; border: 2px solid rgba(255,255,255,.4);
       background: rgba(255,255,255,.08); display: none; }
@@ -64,16 +64,28 @@ export function createInput(root: HTMLElement): InputState {
     badge.style.display = on ? "block" : "none";
     if (on) { s.moveX = 0; s.moveY = 1; s.run = true; }
   };
-  const bind = (id: string, down: () => void, up: () => void) => {
+  // `blocked` lets a button refuse a press while a conflicting one is held (fire vs launcher jump).
+  const bind = (id: string, down: () => void, up: () => void, blocked: () => boolean = () => false) => {
     const el = ui.querySelector<HTMLElement>(id)!;
-    el.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); el.setPointerCapture(e.pointerId); el.classList.add("on"); down(); });
-    const end = (e: PointerEvent) => { e.stopPropagation(); el.classList.remove("on"); up(); };
+    let engaged = false;
+    el.addEventListener("pointerdown", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (blocked()) return;
+      engaged = true;
+      el.setPointerCapture(e.pointerId); el.classList.add("on"); down();
+    });
+    const end = (e: PointerEvent) => {
+      e.stopPropagation();
+      if (!engaged) return;
+      engaged = false;
+      el.classList.remove("on"); up();
+    };
     el.addEventListener("pointerup", end);
     el.addEventListener("pointercancel", end);
   };
-  bind("#btn-fire", () => (s.fireHeld = true), () => (s.fireHeld = false));
+  bind("#btn-fire", () => (s.fireHeld = true), () => (s.fireHeld = false), () => s.launchJumpHeld);
   bind("#btn-jump", () => (s.jumpHeld = true), () => (s.jumpHeld = false));
-  bind("#btn-lj", () => (s.launchJumpHeld = true), () => (s.launchJumpHeld = false));
+  bind("#btn-lj", () => (s.launchJumpHeld = true), () => (s.launchJumpHeld = false), () => s.fireHeld);
   bind("#btn-slug", () => (s.switchPressed = true), () => (s.switchPressed = false));
 
   // ---- free touch: left half = stick, right half = aim drag ----
@@ -133,8 +145,10 @@ export function createInput(root: HTMLElement): InputState {
     s.moveY = (keys.has("KeyW") ? 1 : 0) - (keys.has("KeyS") ? 1 : 0);
     s.run = keys.has("ShiftLeft") || keys.has("ShiftRight");
     s.jumpHeld = keys.has("Space");
-    s.launchJumpHeld = keys.has("KeyE");
-    s.fireHeld = keys.has("KeyF");
+    const f = keys.has("KeyF"), e = keys.has("KeyE");
+    // Fire and launcher jump never run together: the one already held keeps it.
+    s.fireHeld = f && !(e && s.launchJumpHeld);
+    s.launchJumpHeld = e && !(f && s.fireHeld);
     s.switchPressed = keys.has("KeyQ");
     const turn = (keys.has("ArrowLeft") ? 1 : 0) - (keys.has("ArrowRight") ? 1 : 0);
     const look = (keys.has("ArrowUp") ? 1 : 0) - (keys.has("ArrowDown") ? 1 : 0);

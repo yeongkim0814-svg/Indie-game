@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { G, JUMP_SPEED, LAUNCH_JUMP_CHARGE, LAUNCH_JUMP_SLUG, SHOOTER_MASS, SLUGS } from "./config";
-import { GameSim, idleInput } from "./sim";
+import { G, JUMP_CHARGE_TIME, JUMP_SPEED, LAUNCH_JUMP_CHARGE_MIN, LAUNCH_JUMP_SLUG, SHOOTER_MASS, SLUGS } from "./config";
+import { GameSim, idleInput, type SimInput } from "./sim";
 import { PILLARS, SUMMIT, heightAt, terrainHeight } from "./world";
 import { PlayerBody } from "./player";
 
@@ -135,12 +135,31 @@ describe("reachability (bot)", () => {
 });
 
 describe("three jump methods", () => {
-  const dvJump = (SLUGS[LAUNCH_JUMP_SLUG].mass * (SLUGS[LAUNCH_JUMP_SLUG].minSpeed + (SLUGS[LAUNCH_JUMP_SLUG].maxSpeed - SLUGS[LAUNCH_JUMP_SLUG].minSpeed) * LAUNCH_JUMP_CHARGE)) / SHOOTER_MASS;
+  const heavy = SLUGS[LAUNCH_JUMP_SLUG];
+  /** Δv of a launcher jump at a given strength (slug charge). */
+  const dvAt = (charge: number) => (heavy.mass * (heavy.minSpeed + (heavy.maxSpeed - heavy.minSpeed) * charge)) / SHOOTER_MASS;
+  const dvTap = dvAt(LAUNCH_JUMP_CHARGE_MIN);
+  const dvFull = dvAt(1);
+
+  /** Hold a button field for `seconds`, then release it for one step (that step performs the jump). */
+  function holdThenRelease(sim: GameSim, inp: SimInput, field: "launchJumpHeld" | "jumpHeld", seconds: number) {
+    inp[field] = true;
+    const steps = Math.max(1, Math.round(seconds / DT));
+    for (let i = 0; i < steps; i++) sim.step(DT, inp);
+    inp[field] = false;
+    sim.step(DT, inp);
+  }
+  /** Jump elevation, read from the fired slug (recoil is opposite to it). Walking on the ground would blur the player's own velocity. */
+  const elevation = (sim: GameSim) => {
+    const v = sim.slugs[0].vel;
+    return (Math.atan2(-v.y, Math.hypot(v.x, v.z)) * 180) / Math.PI;
+  };
 
   it("1. leg jump: no energy used, no shot", () => {
     const sim = new GameSim();
     const inp = idleInput();
     inp.jump = true;
+    inp.jumpHeld = true;
     sim.step(DT, inp);
     expect(sim.shots).toBe(0);
     expect(sim.energy.value).toBe(sim.energy.max);
@@ -151,33 +170,36 @@ describe("three jump methods", () => {
     const sim = new GameSim();
     const inp = idleInput();
     inp.moveY = 1;
-    inp.launchJump = true;
-    sim.step(DT, inp);
+    holdThenRelease(sim, inp, "launchJumpHeld", 0);
     expect(sim.shots).toBe(1);
     expect(sim.player.vel.z).toBeLessThan(-2);
     expect(sim.player.vel.y).toBeGreaterThan(2);
-    const speed = Math.hypot(sim.player.vel.x, sim.player.vel.y, sim.player.vel.z);
-    expect(speed).toBeCloseTo(dvJump, 0);
-    const s = sim.slugs[0];
-    expect(SHOOTER_MASS * sim.player.vel.z + SLUGS.heavy.mass * s.vel.z).toBeCloseTo(0, 0);
   });
 
-  it("2. launcher jump with the stick idle goes straight up; it follows camera yaw", () => {
-    const up = new GameSim();
-    const a = idleInput();
-    a.launchJump = true;
-    up.step(DT, a);
-    expect(Math.abs(up.player.vel.x)).toBeLessThan(1e-6);
-    expect(up.player.vel.y).toBeGreaterThan(dvJump * 0.95);
+  it("2. launcher jump with an idle stick conserves momentum (straight up)", () => {
+    const sim = new GameSim();
+    holdThenRelease(sim, idleInput(), "launchJumpHeld", 0);
+    const s = sim.slugs[0];
+    expect(Math.abs(sim.player.vel.x)).toBeLessThan(1e-6);
+    // gravity/drag act for two steps, so allow a small slack
+    expect(Math.abs(SHOOTER_MASS * sim.player.vel.y + SLUGS.heavy.mass * s.vel.y)).toBeLessThan(5);
+    expect(Math.abs(sim.player.vel.y - dvTap)).toBeLessThan(0.5);
+  });
 
-    const turned = new GameSim();
-    const b = idleInput();
-    b.moveY = 1;
-    b.yaw = Math.PI / 2; // forward is now -x
-    b.launchJump = true;
-    turned.step(DT, b);
-    expect(turned.player.vel.x).toBeLessThan(-2);
-    expect(Math.abs(turned.player.vel.z)).toBeLessThan(0.1);
+  it("2. strength: a tap is weak, a full hold is strong, and the cost follows", () => {
+    const tap = new GameSim();
+    holdThenRelease(tap, idleInput(), "launchJumpHeld", 0);
+    const full = new GameSim();
+    holdThenRelease(full, idleInput(), "launchJumpHeld", JUMP_CHARGE_TIME + 0.1);
+    const half = new GameSim();
+    holdThenRelease(half, idleInput(), "launchJumpHeld", JUMP_CHARGE_TIME / 2);
+    expect(Math.abs(tap.player.vel.y - dvTap)).toBeLessThan(0.5);
+    expect(Math.abs(full.player.vel.y - dvFull)).toBeLessThan(0.5);
+    expect(half.player.vel.y).toBeGreaterThan(tap.player.vel.y + 0.3);
+    expect(half.player.vel.y).toBeLessThan(full.player.vel.y - 0.3);
+    const cost = (sim: GameSim) => sim.energy.max - sim.energy.value;
+    expect(cost(tap)).toBeLessThan(cost(half));
+    expect(cost(half)).toBeLessThan(cost(full));
   });
 
   it("2. launcher jump angle follows how far the stick is pushed (idle 90°, half 67.5°, full/sprint 45°)", () => {
@@ -185,13 +207,11 @@ describe("three jump methods", () => {
       const sim = new GameSim();
       const inp = idleInput();
       inp.moveY = push;
-      inp.launchJump = true;
-      sim.step(DT, inp);
-      const v = sim.player.vel;
-      return (Math.atan2(v.y, Math.hypot(v.x, v.z)) * 180) / Math.PI;
+      holdThenRelease(sim, inp, "launchJumpHeld", 0);
+      return elevation(sim);
     };
-    // One sim step of gravity/drag has already acted on the velocity, hence the 1.5° tolerance.
-    const near = (actual: number, expected: number) => expect(Math.abs(actual - expected)).toBeLessThan(1.5);
+    // A couple of sim steps of gravity/drag have acted on the velocity, hence the tolerance.
+    const near = (actual: number, expected: number) => expect(Math.abs(actual - expected)).toBeLessThan(1);
     near(elevationFor(0), 90);
     near(elevationFor(0.15), 90); // below the dead zone
     near(elevationFor(0.6), 67.5);
@@ -199,16 +219,32 @@ describe("three jump methods", () => {
     expect(elevationFor(0.8)).toBeLessThan(elevationFor(0.4)); // monotonic: harder push = flatter
   });
 
-  it("3. looking at the floor: the Jump button fires the launcher along the view instead of a leg jump", () => {
+  it("2. launcher jump follows camera yaw", () => {
     const sim = new GameSim();
     const inp = idleInput();
-    inp.aim = { x: 0, y: -1, z: 0 };
-    inp.jump = true;
-    sim.step(DT, inp);
-    expect(sim.shots).toBe(1);
-    expect(sim.lookingDown).toBe(true);
-    expect(sim.player.vel.y).toBeGreaterThan(dvJump * 0.9);
-    expect(sim.player.vel.y).toBeLessThan(dvJump + 1); // launcher only: no leg jump on top
+    inp.moveY = 1;
+    inp.yaw = Math.PI / 2; // forward is now -x
+    holdThenRelease(sim, inp, "launchJumpHeld", 0);
+    expect(sim.player.vel.x).toBeLessThan(-2);
+    expect(Math.abs(sim.player.vel.z)).toBeLessThan(0.2);
+  });
+
+  it("3. looking at the floor: holding Jump charges a launcher jump along the view (no leg jump on top)", () => {
+    const tap = new GameSim();
+    const a = idleInput();
+    a.aim = { x: 0, y: -1, z: 0 };
+    a.jump = true;
+    holdThenRelease(tap, a, "jumpHeld", 0);
+    expect(tap.shots).toBe(1);
+    expect(tap.lookingDown).toBe(true);
+    expect(Math.abs(tap.player.vel.y - dvTap)).toBeLessThan(0.7); // launcher only
+
+    const full = new GameSim();
+    const b = idleInput();
+    b.aim = { x: 0, y: -1, z: 0 };
+    b.jump = true;
+    holdThenRelease(full, b, "jumpHeld", JUMP_CHARGE_TIME + 0.1);
+    expect(full.player.vel.y).toBeGreaterThan(tap.player.vel.y + 2);
   });
 
   it("looking ahead, the Jump button stays a leg jump (no shot)", () => {
@@ -216,6 +252,7 @@ describe("three jump methods", () => {
     const inp = idleInput();
     inp.aim = { x: 0, y: -0.2, z: -1 };
     inp.jump = true;
+    inp.jumpHeld = true;
     sim.step(DT, inp);
     expect(sim.lookingDown).toBe(false);
     expect(sim.shots).toBe(0);
@@ -227,8 +264,45 @@ describe("three jump methods", () => {
     const inp = idleInput();
     inp.aim = { x: 0, y: -1, z: 0 };
     inp.jump = true;
+    inp.jumpHeld = true;
     sim.step(DT, inp);
     expect(sim.shots).toBe(0);
     expect(sim.player.vel.y).toBeGreaterThan(JUMP_SPEED - 0.5);
+  });
+});
+
+describe("fire and launcher jump never run together", () => {
+  it("pressing fire while the jump is charging does nothing, and vice versa", () => {
+    const sim = new GameSim();
+    const inp = idleInput();
+    inp.aim = { x: 0, y: 0, z: -1 };
+    inp.launchJumpHeld = true;
+    sim.step(DT, inp);
+    inp.fireHeld = true; // pressed while the jump owns the charge
+    for (let i = 0; i < 20; i++) sim.step(DT, inp);
+    expect(sim.charging).toBe(false);
+    expect(sim.charge).toBe(0);
+    expect(sim.jumpCharging).toBe(true);
+    inp.launchJumpHeld = false; // release → the jump happens, exactly one shot
+    sim.step(DT, inp);
+    expect(sim.shots).toBe(1);
+    expect(sim.slugs[0].vel.y).toBeLessThan(0); // it is the jump's downward-ish slug, not a forward shot
+    // fire is still held, but it needs a fresh press to start charging
+    for (let i = 0; i < 10; i++) sim.step(DT, inp);
+    expect(sim.charging).toBe(false);
+
+    const sim2 = new GameSim();
+    const b = idleInput();
+    b.aim = { x: 0, y: 0, z: -1 };
+    b.fireHeld = true;
+    sim2.step(DT, b);
+    b.launchJumpHeld = true; // pressed while fire owns the charge
+    for (let i = 0; i < 20; i++) sim2.step(DT, b);
+    expect(sim2.charging).toBe(true);
+    expect(sim2.jumpCharging).toBe(false);
+    b.fireHeld = false;
+    sim2.step(DT, b);
+    expect(sim2.shots).toBe(1);
+    expect(sim2.slugs[0].vel.z).toBeLessThan(0); // a forward shot, not a jump
   });
 });

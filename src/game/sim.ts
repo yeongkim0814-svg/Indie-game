@@ -1,5 +1,5 @@
 import {
-  CHARGE_TIME, CRATE_FRICTION, CRATE_MASS, FIRE_COOLDOWN, G, LAUNCH_JUMP_CHARGE, LAUNCH_JUMP_ELEVATION_MAX,
+  CHARGE_TIME, CRATE_FRICTION, CRATE_MASS, FIRE_COOLDOWN, G, JUMP_CHARGE_TIME, LAUNCH_JUMP_CHARGE_MIN, LAUNCH_JUMP_ELEVATION_MAX,
   LAUNCH_JUMP_ELEVATION_MIN, LAUNCH_JUMP_SLUG, LAUNCH_JUMP_STICK_MIN, LOOK_DOWN_PITCH, MIN_CHARGE, SHOOTER_MASS, SLUGS, SLUG_LIFETIME,
   SLUG_ORDER, type SlugId,
 } from "./config";
@@ -28,8 +28,10 @@ export interface ImpactEvent {
 }
 
 export interface SimInput extends MoveInput {
-  /** Edge: launcher jump toward the stick direction (jump method 2). */
-  launchJump: boolean;
+  /** Held: launcher-jump button (method 2). Hold to charge, release to jump toward the stick direction. */
+  launchJumpHeld: boolean;
+  /** Held: Jump button. While looking at the floor it charges a launcher jump along the view (method 3). */
+  jumpHeld: boolean;
   fireHeld: boolean;
   switchSlug: boolean;
   /** Aim direction (unit) for firing; derived from camera by the caller. */
@@ -37,7 +39,7 @@ export interface SimInput extends MoveInput {
 }
 
 export const idleInput = (): SimInput => ({
-  moveX: 0, moveY: 0, run: false, jump: false, yaw: 0, launchJump: false, fireHeld: false, switchSlug: false, aim: { x: 0, y: 0, z: -1 },
+  moveX: 0, moveY: 0, run: false, jump: false, yaw: 0, launchJumpHeld: false, jumpHeld: false, fireHeld: false, switchSlug: false, aim: { x: 0, y: 0, z: -1 },
 });
 
 export class GameSim {
@@ -55,7 +57,12 @@ export class GameSim {
   summitReached = false;
   maxHeight = 0;
   events: ImpactEvent[] = [];
-  private wasFiring = false;
+  /** Launcher-jump charge state. Fire and launcher-jump never charge at the same time (see `active`). */
+  jumpCharging = false;
+  jumpCharge = 0;
+  private active: "fire" | "jump" | null = null;
+  private jumpMode: "stick" | "view" = "stick";
+  private prev = { fire: false, stickJump: false, viewJump: false };
   private wasSwitch = false;
 
   /** Speed a shot would leave with at `charge`, limited by remaining energy. */
@@ -101,7 +108,7 @@ export class GameSim {
    * Method 2: jump toward the stick direction by firing the opposite way.
    * The harder the stick is pushed, the flatter the jump: idle = straight up, full push (sprint) = 45°.
    */
-  launchJumpToward(input: SimInput): boolean {
+  launchJumpToward(input: SimInput, strength: number): boolean {
     const mag = Math.min(1, Math.hypot(input.moveX, input.moveY));
     let jumpDir: Vec3 = { x: 0, y: 1, z: 0 };
     if (mag >= LAUNCH_JUMP_STICK_MIN) {
@@ -115,12 +122,30 @@ export class GameSim {
       const c = Math.cos(elevation), sEl = Math.sin(elevation);
       jumpDir = { x: hx * c, y: sEl, z: hz * c };
     }
-    return this.fire({ x: -jumpDir.x, y: -jumpDir.y, z: -jumpDir.z }, LAUNCH_JUMP_CHARGE, LAUNCH_JUMP_SLUG);
+    return this.fire({ x: -jumpDir.x, y: -jumpDir.y, z: -jumpDir.z }, strength, LAUNCH_JUMP_SLUG);
   }
 
   /** Method 3: with the view on the floor, the Jump button fires the launcher along the view. */
-  launchJumpAlongView(aim: Vec3): boolean {
-    return this.fire(aim, LAUNCH_JUMP_CHARGE, LAUNCH_JUMP_SLUG);
+  launchJumpAlongView(aim: Vec3, strength: number): boolean {
+    return this.fire(aim, strength, LAUNCH_JUMP_SLUG);
+  }
+
+  /** Charge → launcher-jump strength (slug charge in [MIN, 1]). */
+  jumpStrength(charge = this.jumpCharge): number {
+    return LAUNCH_JUMP_CHARGE_MIN + (1 - LAUNCH_JUMP_CHARGE_MIN) * charge;
+  }
+
+  /** Whether a launcher jump (at minimum strength) can currently be paid for. */
+  canLaunchJump(): boolean {
+    const t = SLUGS[LAUNCH_JUMP_SLUG];
+    return this.muzzleSpeed(LAUNCH_JUMP_CHARGE_MIN, LAUNCH_JUMP_SLUG) >= t.minSpeed * 0.6;
+  }
+
+  /** Energy cost and Δv of the launcher jump being charged (for the HUD). */
+  jumpPreview(): { cost: number; dv: number } {
+    const t = SLUGS[LAUNCH_JUMP_SLUG];
+    const speed = this.muzzleSpeed(this.jumpStrength(), LAUNCH_JUMP_SLUG);
+    return { cost: slugEnergy(t.mass, speed), dv: (t.mass * speed) / SHOOTER_MASS };
   }
 
   cycleSlug(): void {
@@ -132,20 +157,48 @@ export class GameSim {
     this.wasSwitch = input.switchSlug;
 
     this.cooldown = Math.max(0, this.cooldown - dt);
-    if (input.fireHeld) {
-      this.charging = true;
-      this.charge = Math.min(1, this.charge + dt / CHARGE_TIME);
-    } else if (this.wasFiring) {
-      this.fire(input.aim, Math.max(MIN_CHARGE, this.charge));
-      this.charge = 0;
-      this.charging = false;
-    }
-    this.wasFiring = input.fireHeld;
-
     this.lookingDown = input.aim.y <= Math.sin(LOOK_DOWN_PITCH);
-    let legJump = input.jump;
-    if (input.launchJump) this.launchJumpToward(input);
-    else if (input.jump && this.lookingDown && this.launchJumpAlongView(input.aim)) legJump = false;
+
+    // Looking at the floor with energy to spare: the Jump button charges a launcher jump instead of a leg jump.
+    const viewJumpCapable = this.lookingDown && this.canLaunchJump();
+    const viewJumpHeld = input.jumpHeld && viewJumpCapable;
+    let legJump = input.jump && !viewJumpCapable;
+
+    // Only one charge at a time: whichever button is pressed first owns it until released.
+    if (this.active === null) {
+      if (input.fireHeld && !this.prev.fire) this.active = "fire";
+      else if (input.launchJumpHeld && !this.prev.stickJump) { this.active = "jump"; this.jumpMode = "stick"; }
+      else if (viewJumpHeld && !this.prev.viewJump) { this.active = "jump"; this.jumpMode = "view"; }
+    }
+    this.prev = { fire: input.fireHeld, stickJump: input.launchJumpHeld, viewJump: viewJumpHeld };
+
+    if (this.active === "fire") {
+      if (input.fireHeld) {
+        this.charging = true;
+        this.charge = Math.min(1, this.charge + dt / CHARGE_TIME);
+      } else {
+        this.fire(input.aim, Math.max(MIN_CHARGE, this.charge));
+        this.charge = 0;
+        this.charging = false;
+        this.active = null;
+      }
+    } else if (this.active === "jump") {
+      const held = this.jumpMode === "stick" ? input.launchJumpHeld : input.jumpHeld;
+      if (held) {
+        this.jumpCharging = true;
+        this.jumpCharge = Math.min(1, this.jumpCharge + dt / JUMP_CHARGE_TIME);
+      } else {
+        const strength = this.jumpStrength();
+        const ok = this.jumpMode === "stick"
+          ? this.launchJumpToward(input, strength)
+          : this.launchJumpAlongView(input.aim, strength);
+        if (!ok && this.jumpMode === "view") legJump = true; // could not pay: fall back to a leg jump
+        this.jumpCharge = 0;
+        this.jumpCharging = false;
+        this.active = null;
+      }
+    }
+
     this.player.step(dt, legJump === input.jump ? input : { ...input, jump: legJump }, heightAt);
     this.energy.step(dt, this.player.grounded);
     this.stepSlugs(dt);
