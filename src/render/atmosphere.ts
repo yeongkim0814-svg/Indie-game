@@ -1,7 +1,7 @@
 import * as THREE from "three";
 
-/** Direction toward the sun: high and to the right of the rim view (+x), so ridges and monoliths split into lit and shaded faces. */
-export const SUN_DIR = new THREE.Vector3(0.2, 0.62, 0.76).normalize();
+/** Direction toward the sun: high and to the upper-left of the rim view (+x), as in the reference: clouds lit on their left side. */
+export const SUN_DIR = new THREE.Vector3(0.3, 0.7, -0.65).normalize();
 
 export const SKY = {
   zenith: new THREE.Color("#2e6fc4"),

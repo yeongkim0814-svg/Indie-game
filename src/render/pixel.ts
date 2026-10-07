@@ -117,7 +117,7 @@ export function createPixelPipeline(renderer: THREE.WebGLRenderer) {
     target.setSize(tw, th);
     uniforms.uTexel.value.set(1 / tw, 1 / th);
     uniforms.uStyle.value = scale === 1 ? 0 : 1;
-    uniforms.uRMax.value = scale >= 6 ? 2 : 3;
+    uniforms.uRMax.value = scale >= 6 ? 1 : 2;
     renderer.setPixelRatio(1);
     renderer.setSize(w, h, false);
     return { tw, th };
