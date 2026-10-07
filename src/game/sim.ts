@@ -1,6 +1,6 @@
 import {
-  CHARGE_TIME, CRATE_FRICTION, CRATE_MASS, FIRE_COOLDOWN, G, LAUNCH_JUMP_CHARGE, LAUNCH_JUMP_ELEVATION,
-  LAUNCH_JUMP_SLUG, LAUNCH_JUMP_STICK_MIN, LOOK_DOWN_PITCH, MIN_CHARGE, SHOOTER_MASS, SLUGS, SLUG_LIFETIME,
+  CHARGE_TIME, CRATE_FRICTION, CRATE_MASS, FIRE_COOLDOWN, G, LAUNCH_JUMP_CHARGE, LAUNCH_JUMP_ELEVATION_MAX,
+  LAUNCH_JUMP_ELEVATION_MIN, LAUNCH_JUMP_SLUG, LAUNCH_JUMP_STICK_MIN, LOOK_DOWN_PITCH, MIN_CHARGE, SHOOTER_MASS, SLUGS, SLUG_LIFETIME,
   SLUG_ORDER, type SlugId,
 } from "./config";
 import { EnergyGauge } from "./energy";
@@ -97,9 +97,12 @@ export class GameSim {
   /** True while the camera looks at the floor steeply enough that Jump means "launcher jump along the view". */
   lookingDown = false;
 
-  /** Method 2: jump toward the stick direction by firing the opposite way. Straight up if the stick is idle. */
+  /**
+   * Method 2: jump toward the stick direction by firing the opposite way.
+   * The harder the stick is pushed, the flatter the jump: idle = straight up, full push (sprint) = 45°.
+   */
   launchJumpToward(input: SimInput): boolean {
-    const mag = Math.hypot(input.moveX, input.moveY);
+    const mag = Math.min(1, Math.hypot(input.moveX, input.moveY));
     let jumpDir: Vec3 = { x: 0, y: 1, z: 0 };
     if (mag >= LAUNCH_JUMP_STICK_MIN) {
       const sy = Math.sin(input.yaw), cy = Math.cos(input.yaw);
@@ -107,7 +110,9 @@ export class GameSim {
       let hz = -input.moveX * sy - input.moveY * cy;
       const hm = Math.hypot(hx, hz);
       hx /= hm; hz /= hm;
-      const c = Math.cos(LAUNCH_JUMP_ELEVATION), sEl = Math.sin(LAUNCH_JUMP_ELEVATION);
+      const t = (mag - LAUNCH_JUMP_STICK_MIN) / (1 - LAUNCH_JUMP_STICK_MIN);
+      const elevation = LAUNCH_JUMP_ELEVATION_MAX - t * (LAUNCH_JUMP_ELEVATION_MAX - LAUNCH_JUMP_ELEVATION_MIN);
+      const c = Math.cos(elevation), sEl = Math.sin(elevation);
       jumpDir = { x: hx * c, y: sEl, z: hz * c };
     }
     return this.fire({ x: -jumpDir.x, y: -jumpDir.y, z: -jumpDir.z }, LAUNCH_JUMP_CHARGE, LAUNCH_JUMP_SLUG);

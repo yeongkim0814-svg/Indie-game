@@ -47,8 +47,12 @@ export const CRATE_FRICTION = 7;
 /** Launcher jump: always a heavy slug at this charge, so it is a reliable, energy-hungry jump. */
 export const LAUNCH_JUMP_SLUG: SlugId = "heavy";
 export const LAUNCH_JUMP_CHARGE = 0.9;
-/** Elevation of the launcher jump when steering with the stick (0 = flat, 90° = straight up). */
-export const LAUNCH_JUMP_ELEVATION = (50 * Math.PI) / 180;
+/**
+ * Launcher-jump elevation (above horizontal) depends on how far the stick is pushed:
+ * idle (< STICK_MIN) = straight up, full push / sprint = MIN elevation, linear in between.
+ */
+export const LAUNCH_JUMP_ELEVATION_MAX = Math.PI / 2;
+export const LAUNCH_JUMP_ELEVATION_MIN = (45 * Math.PI) / 180;
 /** Stick magnitude below this counts as "no direction" → straight-up launcher jump. */
 export const LAUNCH_JUMP_STICK_MIN = 0.2;
 /** Camera pitch below this (radians, ≈ -52°) means "looking at the floor": the Jump button fires the launcher along the view. */

@@ -180,6 +180,25 @@ describe("three jump methods", () => {
     expect(Math.abs(turned.player.vel.z)).toBeLessThan(0.1);
   });
 
+  it("2. launcher jump angle follows how far the stick is pushed (idle 90°, half 67.5°, full/sprint 45°)", () => {
+    const elevationFor = (push: number) => {
+      const sim = new GameSim();
+      const inp = idleInput();
+      inp.moveY = push;
+      inp.launchJump = true;
+      sim.step(DT, inp);
+      const v = sim.player.vel;
+      return (Math.atan2(v.y, Math.hypot(v.x, v.z)) * 180) / Math.PI;
+    };
+    // One sim step of gravity/drag has already acted on the velocity, hence the 1.5° tolerance.
+    const near = (actual: number, expected: number) => expect(Math.abs(actual - expected)).toBeLessThan(1.5);
+    near(elevationFor(0), 90);
+    near(elevationFor(0.15), 90); // below the dead zone
+    near(elevationFor(0.6), 67.5);
+    near(elevationFor(1), 45);
+    expect(elevationFor(0.8)).toBeLessThan(elevationFor(0.4)); // monotonic: harder push = flatter
+  });
+
   it("3. looking at the floor: the Jump button fires the launcher along the view instead of a leg jump", () => {
     const sim = new GameSim();
     const inp = idleInput();
