@@ -8,6 +8,8 @@
 export const S = 16;
 export const YAW_ISO = Math.PI / 4;
 export const PITCH_ISO = Math.PI / 6;
+/** camera I looks slightly down so the ledge top shows as a strip */
+export const PITCH_SIDE = (12 * Math.PI) / 180;
 
 export interface View { yaw: number; pitch: number; c: number; s: number; cp: number; sp: number }
 

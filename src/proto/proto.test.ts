@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { Raid, idleRaidInput } from "../game/raid";
 import { PROTO_MAP, TILES, LANE_Y, zoneAt } from "./world";
-import { PITCH_ISO, YAW_ISO, depthOf, faceVisible, makeView, project } from "./project";
+import { PITCH_ISO, PITCH_SIDE, YAW_ISO, depthOf, faceVisible, makeView, project } from "./project";
+import { stepProto } from "./sim";
+import type { Crawler } from "../game/raid";
 import { CameraRig, TRANSITION } from "./camera";
 
 describe("projection", () => {
@@ -27,9 +29,11 @@ describe("camera rig", () => {
     const r = new CameraRig();
     for (let t = 0; t < TRANSITION / 2; t += 0.01) r.update(0.01, "I");
     expect(r.yaw).toBeGreaterThan(0); expect(r.yaw).toBeLessThan(YAW_ISO);
-    expect(r.yaw / YAW_ISO).toBeCloseTo(r.pitch / PITCH_ISO);
+    expect(r.yaw / YAW_ISO).toBeCloseTo((r.pitch - PITCH_SIDE) / (PITCH_ISO - PITCH_SIDE));
     for (let t = 0; t < 1; t += 0.01) r.update(0.01, "I");
-    expect(r.yaw).toBe(0); expect(r.pitch).toBe(0); expect(r.background).toBe(1);
+    expect(r.yaw).toBe(0); expect(r.pitch).toBeCloseTo((12 * Math.PI) / 180); expect(r.background).toBe(1);
+    const r2 = new CameraRig();
+    expect(r2.background).toBe(0);
   });
 });
 
@@ -77,5 +81,21 @@ describe("proto map", () => {
     }
     expect(len).toBe(30);
     expect(TILES[LANE_Y - 2][30]).toBe("~"); expect(TILES[LANE_Y + 1][30]).toBe("~");
+  });
+});
+
+describe("crawlers and the ledge", () => {
+  it("never end up on a '=' tile while chasing a player standing on the ledge", () => {
+    const raid = new Raid(PROTO_MAP, 7), last = new WeakMap<Crawler, { x: number; y: number }>();
+    raid.player.hp = 999; raid.player.pos.x = 24.5; raid.player.pos.y = 10;
+    raid.crawlers = [raid.crawlers[0]]; raid.crawlers[0].pos = { x: 16.5, y: 10 };
+    let maxX = 0;
+    for (let n = 0; n < 120 * 15; n++) {
+      stepProto(raid, 1 / 120, idleRaidInput(), last);
+      const c = raid.crawlers[0];
+      expect(zoneAt(c.pos.x, c.pos.y)).toBe("arena");
+      maxX = Math.max(maxX, c.pos.x);
+    }
+    expect(maxX).toBeGreaterThan(17); // it did chase to the mouth
   });
 });

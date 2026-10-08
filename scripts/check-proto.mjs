@@ -74,8 +74,8 @@ try {
   }, null, { timeout: 60000, polling: "raf" });
   const mid = await cam();
   info.transition = mid;
-  expect(mid.yaw > 5 && mid.yaw < 40 && mid.pitch > 3 && mid.pitch < 27, "mid-transition yaw/pitch should be between: " + JSON.stringify(mid));
-  expect(near(mid.yaw / 45, mid.pitch / 30, 0.02), "yaw and pitch should swing together");
+  expect(mid.yaw > 5 && mid.yaw < 40 && mid.pitch > 14 && mid.pitch < 28, "mid-transition yaw/pitch should be between: " + JSON.stringify(mid));
+  expect(near(mid.yaw / 45, (mid.pitch - 12) / 18, 0.02), "yaw and pitch should swing together");
   expect(mid.background > 0.2 && mid.background < 0.8, "background should be fading in mid-transition: " + mid.background);
   await page.screenshot({ path: "screenshots/proto-transition.png" });
   await ev(() => { window.__proto.paused = false; });
@@ -86,7 +86,7 @@ try {
   await frames(5);
   c = await cam();
   info.path = c;
-  expect(c.mode === "I" && near(c.yaw, 0, 0.01) && near(c.pitch, 0, 0.01), "path should settle at camera I 0/0: " + JSON.stringify(c));
+  expect(c.mode === "I" && near(c.yaw, 0, 0.01) && near(c.pitch, 12, 0.01), "path should settle at camera I 0/12: " + JSON.stringify(c));
   expect(c.background === 1, "background should be fully visible in camera I");
   await page.screenshot({ path: "screenshots/proto-path.png" });
 
@@ -116,6 +116,24 @@ try {
   expect((await ev(() => window.__proto.zone)) === "arena", "east zone should be arena");
   await frames(10);
   await page.screenshot({ path: "screenshots/proto-east.png" });
+
+  // 6b. crawlers give up at the ledge mouth: put one west of the ledge, the player on it, and watch for 400 frames
+  await ev(() => {
+    const r = window.__proto.raid;
+    r.crawlers.length = 0;
+    r.crawlers.push({ pos: { x: 16.5, y: 10 }, vel: { x: 0, y: 0 }, hp: 4, alive: true, touchCooldown: 0, airborne: 0 });
+    r.player.pos.x = 26; r.player.pos.y = 10; r.player.vel.x = r.player.vel.y = 0;
+    window.__proto.snap();
+    window.__proto.watch = { onPath: 0, maxX: 0 };
+    const w = window.__proto.watch;
+    const tick = () => { const c = r.crawlers[0]; if (window.__proto.tileAt(c.pos.x, c.pos.y) === "=") w.onPath++; w.maxX = Math.max(w.maxX, c.pos.x); requestAnimationFrame(tick); };
+    tick();
+  });
+  await frames(400);
+  info.crawler = await ev(() => ({ ...window.__proto.watch, hp: window.__proto.raid.player.hp }));
+  expect(info.crawler.onPath === 0, "a crawler stepped onto a '=' tile");
+  expect(info.crawler.maxX > 17 && info.crawler.maxX < 19, "crawler should have chased to the ledge mouth: " + info.crawler.maxX);
+  expect(info.crawler.hp === 99, "a crawler bit the player on the ledge");
 
   // 7. extraction
   const ex = await ev(() => window.__proto.raid.map.extraction);

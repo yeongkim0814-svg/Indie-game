@@ -1,13 +1,13 @@
 import { RAID, type Raid } from "../game/raid";
 import { FLOWER, GRASS, ROCK, hash2 } from "../view/palette";
 import { Fb, hexN, mixC } from "./raster";
-import { PITCH_ISO, depthOf, faceVisible, project, screenRight, type View } from "./project";
+import { PITCH_ISO, PITCH_SIDE, depthOf, faceVisible, project, screenRight, type View } from "./project";
 import { ROCK_H, SLAB_D, TILES } from "./world";
 
 const G = GRASS.map(hexN);
 const R = ROCK.map(hexN);
-const SLAB_SIDE = mixC(R[3], G[1], 0.3);
-const SLAB_HATCH = mixC(SLAB_SIDE, R[4], 0.4);
+const SLAB_SIDE = mixC(R[3], R[4], 0.45); // lit cliff stone
+const SLAB_HATCH = mixC(R[2], R[0], 0.4); // dark diagonal strokes
 const GEM: Record<string, number> = { quartz: 0x6fe0d0, ore: 0xc8e05a, bio: 0xc06090 };
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
@@ -54,23 +54,23 @@ export class Scene {
     const f0 = project(v, f.focus.x, f.focus.y, 0, pr);
     const offX = Math.round(f0.sx - W / 2), offY = Math.round(f0.sy - H * 0.6);
     const scr = (x: number, y: number, z: number): [number, number] => { project(v, x, y, z, pr); return [pr.sx - offX, pr.sy - offY]; };
-    const pitchK = clamp(v.pitch / PITCH_ISO, 0, 1);
+    const pitchK = clamp((v.pitch - PITCH_SIDE) / (PITCH_ISO - PITCH_SIDE), 0, 1);
 
-    const face = (p: number[], col: number, a = 1, hatch?: number, lip?: number) => {
+    const face = (p: number[], col: number, a = 1, hatch?: number, lip?: number, width = 1, dither = false) => {
       const sp: number[] = [];
-      for (let k = 0; k < 4; k++) sp.push(...scr(p[k * 3], p[k * 3 + 1], p[k * 3 + 2]));
-      fb.poly(sp, col, a, hatch === undefined ? undefined : { col: hatch, ox: Math.round(sp[0]), oy: Math.round(sp[1]) });
-      if (lip !== undefined) fb.line(sp[0], sp[1], sp[2], sp[3], lip, a); // lit lip along the top edge
+      for (let k = 0; k < 4; k++) { const q = scr(p[k * 3], p[k * 3 + 1], p[k * 3 + 2]); sp.push(Math.round(q[0]), Math.round(q[1])); }
+      fb.poly(sp, col, a, hatch === undefined ? undefined : { col: hatch, ox: sp[0], oy: sp[1], width }, dither);
+      if (lip !== undefined) { fb.line(sp[0], sp[1], sp[2], sp[3], lip, a); fb.line(sp[0], sp[1] + 1, sp[2], sp[3] + 1, mixC(lip, G[2], 0.5), a); } // grassy lit lip
     };
     const sideCol = (base: number, nx: number, ny: number) => mixC(base, R[0], clamp(0.28 + 0.14 * screenRight(v, nx, ny), 0.1, 0.5));
     /** vertical quad on a box side; n is the outward normal */
-    const side = (tx: number, ty: number, n: [number, number, number], z0: number, z1: number, col: number, a: number, hatch?: number, lip?: number) => {
+    const side = (tx: number, ty: number, n: [number, number, number], z0: number, z1: number, col: number, a: number, hatch?: number, lip?: number, width = 1, dither = false) => {
       const [nx, ny] = n;
       const x0 = tx + (nx > 0 ? 1 : 0), y0 = ty + (ny > 0 ? 1 : 0);
       const dx = ny !== 0 ? 1 : 0, dy = nx !== 0 ? 1 : 0;
-      face([x0, y0, z1, x0 + dx, y0 + dy, z1, x0 + dx, y0 + dy, z0, x0, y0, z0], sideCol(col, nx, ny), a, hatch === undefined ? undefined : sideCol(hatch, nx, ny), lip);
+      face([x0, y0, z1, x0 + dx, y0 + dy, z1, x0 + dx, y0 + dy, z0, x0, y0, z0], sideCol(col, nx, ny), a, hatch === undefined ? undefined : sideCol(hatch, nx, ny), lip, width, dither);
     };
-    const top = (tx: number, ty: number, z: number, col: number, a = 1) => face([tx, ty, z, tx + 1, ty, z, tx + 1, ty + 1, z, tx, ty + 1, z], col, a);
+    const top = (tx: number, ty: number, z: number, col: number, dither = false) => face([tx, ty, z, tx + 1, ty, z, tx + 1, ty + 1, z, tx, ty + 1, z], col, 1, undefined, undefined, 1, dither);
     const tileCh = (x: number, y: number) => TILES[y]?.[x] ?? "~";
 
     // ---- tiles in view
@@ -91,7 +91,7 @@ export class Scene {
     for (const { tx, ty, ch } of slabs) {
       for (const n of SIDES) {
         if (!faceVisible(v, n[0], n[1], 0) || tileCh(tx + n[0], ty + n[1]) !== "~") continue;
-        side(tx, ty, n, -SLAB_D, 0, SLAB_SIDE, 1, SLAB_HATCH, ch === "=" ? 0xa3cfe3 : G[4]);
+        side(tx, ty, n, -SLAB_D, 0, SLAB_SIDE, 1, SLAB_HATCH, G[4], 2);
       }
       if (!faceVisible(v, 0, 0, 1)) continue;
       const h = hash2(tx, ty, 1);
@@ -120,30 +120,30 @@ export class Scene {
       for (const dx of [-6, 0, 6]) for (const dy of [0, -11, -22]) pts.push([sx + dx, sy + dy]);
       return { d: depthOf(v, t.x, t.y, 0), pts };
     });
-    const see = new Set<string>();
+    const see = new Map<string, number[][]>();
     for (const r of rocks) {
       if (pitchK < 0.05) break;
       const corners: number[][] = [];
       for (const z of [0, ROCK_H]) for (const [dx, dy] of [[0, 0], [1, 0], [1, 1], [0, 1]]) corners.push(scr(r.tx + dx, r.ty + dy, z));
       const hl = hull(corners);
-      if (tdata.some((t) => r.d > t.d + 0.01 && t.pts.some(([x, y]) => inside(hl, x, y)))) see.add(r.tx + "," + r.ty);
+      if (tdata.some((t) => r.d > t.d + 0.01 && t.pts.some(([x, y]) => inside(hl, x, y)))) see.set(r.tx + "," + r.ty, hl);
     }
     this.seeThrough = see.size;
 
     // ---- layer 2: rocks and billboards, one painter's sort
     const items: Item[] = [];
-    const seeA = 1 - 0.7 * pitchK;
     for (const r of rocks) {
-      const a = see.has(r.tx + "," + r.ty) ? seeA : 1;
+      const outline = see.get(r.tx + "," + r.ty), a = 1, dither = !!outline;
       items.push({ key: r.d, draw: () => {
         const { tx, ty } = r;
         const h = hash2(tx, ty, 5);
         const base = R[3], tcol = [R[4], mixC(R[3], R[4], 0.6), mixC(R[4], hexN("#a3cfe3"), 0.15)][Math.floor(h * 3)];
         for (const n of SIDES) {
           if (!faceVisible(v, n[0], n[1], 0) || tileCh(tx + n[0], ty + n[1]) === "#") continue;
-          side(tx, ty, n, 0, ROCK_H, base, a, mixC(base, R[1], 0.5));
+          side(tx, ty, n, 0, ROCK_H, base, a, mixC(base, R[1], 0.5), undefined, 1, dither);
         }
-        if (faceVisible(v, 0, 0, 1)) top(tx, ty, ROCK_H, tcol, a);
+        if (faceVisible(v, 0, 0, 1)) top(tx, ty, ROCK_H, tcol, dither);
+        if (outline) for (let i = 0; i < outline.length; i++) { const p0 = outline[i], p1 = outline[(i + 1) % outline.length]; fb.line(p0[0], p0[1], p1[0], p1[1], 0xcfe6ee); }
       } });
     }
     const feet = (x: number, y: number, z = 0): [number, number] => { const [sx, sy] = scr(x, y, z); return [Math.round(sx), Math.round(sy)]; };

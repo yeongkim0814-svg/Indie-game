@@ -11,7 +11,7 @@ export function mixC(a: number, b: number, t: number): number {
   return (ch(16) << 16) | (ch(8) << 8) | ch(0);
 }
 
-export interface Hatch { col: number; ox: number; oy: number }
+export interface Hatch { col: number; ox: number; oy: number; width?: number }
 
 export class Fb {
   readonly img: ImageData;
@@ -43,7 +43,7 @@ export class Fb {
   }
 
   /** Convex polygon, pixel-centre sampling (top-left rule), optional diagonal hatch lines. pts = [x0,y0,x1,y1,...] */
-  poly(pts: number[], col: number, a = 1, hatch?: Hatch) {
+  poly(pts: number[], col: number, a = 1, hatch?: Hatch, dither = false) {
     const n = pts.length / 2;
     let minY = Infinity, maxY = -Infinity;
     for (let i = 0; i < n; i++) { const y = pts[i * 2 + 1]; if (y < minY) minY = y; if (y > maxY) maxY = y; }
@@ -63,7 +63,8 @@ export class Fb {
       if (xl > xr) continue;
       const xs = Math.max(0, Math.ceil(xl - 0.5)), xe = Math.min(this.w - 1, Math.ceil(xr - 0.5) - 1);
       for (let x = xs; x <= xe; x++) {
-        const c = hatch && (((x - hatch.ox) + (y - hatch.oy)) & 3) === 0 ? hatch.col : col;
+        if (dither && ((x + y) & 1)) continue; // checkerboard: every other pixel
+        const c = hatch && ((((x - hatch.ox) + (y - hatch.oy)) & 3) < (hatch.width ?? 1)) ? hatch.col : col;
         this.plot(y * this.w + x, c, a);
       }
     }

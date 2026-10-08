@@ -4,11 +4,13 @@ import { Input } from "../view/input";
 import { loadVistaArt } from "../view/art";
 import { Vista, VISTA_H } from "../view/vista";
 import { CameraRig, type CamMode } from "./camera";
+import { stepProto } from "./sim";
 import { Scene } from "./scene";
-import { PROTO_MAP, LANE_Y, zoneAt, type Zone } from "./world";
+import { PROTO_MAP, LANE_Y, tileAt, zoneAt, type Zone } from "./world";
 import { project } from "./project";
 import { hexN } from "./raster";
 import { ROCK } from "../view/palette";
+import type { Crawler } from "../game/raid";
 
 declare global {
   interface Window {
@@ -20,6 +22,8 @@ declare global {
       /** freeze simulation + camera time (rendering continues), for screenshots */
       paused: boolean;
       snap(): void;
+      tileAt(x: number, y: number): string;
+      watch?: { onPath: number; maxX: number };
     };
   }
 }
@@ -93,6 +97,7 @@ function updateHud() {
 
 input.setEnabled(true);
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+
 const BG = hexN(ROCK[0]);
 
 /** Camera II: the stick is screen-relative (rotated by the yaw). Camera I: lane axis only, y steers to the centre line, no fire. */
@@ -107,6 +112,7 @@ function controls(): RaidInput {
   return { move: { x: s.move.x * c - s.move.y * sn, y: s.move.x * sn + s.move.y * c }, fire: s.fire };
 }
 
+const lastOk = new WeakMap<Crawler, { x: number; y: number }>();
 let last = performance.now(), acc = 0, t = 0, paused = false;
 function frame(now: number) {
   const dt = paused ? 0 : Math.min(0.05, Math.max(0, (now - last) / 1000));
@@ -114,7 +120,7 @@ function frame(now: number) {
   zone = zoneAt(raid.player.pos.x, raid.player.pos.y);
   rig.update(dt, zone === "path" ? "I" : "II");
   acc += dt;
-  while (acc >= STEP) { if (raid.state === "running") raid.step(STEP, controls()); acc -= STEP; }
+  while (acc >= STEP) { if (raid.state === "running") stepProto(raid, STEP, controls(), lastOk); acc -= STEP; }
   raid.events.length = 0;
   const k = 1 - Math.exp(-dt * 8);
   rig.focus.x += (raid.player.pos.x - rig.focus.x) * k;
@@ -129,6 +135,10 @@ function frame(now: number) {
   if (bg > 0.001) {
     const fp = project(view, rig.focus.x, rig.focus.y, 0);
     vista.draw(vistaCv.getContext("2d")!, W, { cx: Math.round(fp.sx - W / 2), cy: 60, t, daylight: 1, known: new Set(), look: 0, isVoid: () => true });
+    // fade the lowest ridges into the haze so the "near" layer does not read as a flat grey band
+    const vg = vistaCv.getContext("2d")!, grad = vg.createLinearGradient(0, 95, 0, VISTA_H);
+    grad.addColorStop(0, "rgba(163,207,227,0)"); grad.addColorStop(1, "rgba(163,207,227,0.92)");
+    vg.fillStyle = grad; vg.fillRect(0, 95, W, VISTA_H - 95);
     g.globalAlpha = bg;
     g.drawImage(vistaCv, 0, 0);
     g.globalAlpha = 1;
@@ -151,6 +161,8 @@ window.__proto = {
   get seeThrough() { return scene.seeThrough; },
   get paused() { return paused; },
   set paused(v: boolean) { paused = v; },
+  tileAt,
+  watch: undefined,
   snap() {
     zone = zoneAt(raid.player.pos.x, raid.player.pos.y);
     rig.focus = { ...raid.player.pos };
