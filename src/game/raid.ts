@@ -4,8 +4,9 @@
  */
 import { FIRST_MAP, parseMap, type ParsedMap } from "./raidMap";
 import { Grid } from "./inventory";
-import { ageItem, itemValue, makeItem, temperature, type Item } from "./items";
+import { ageItem, itemMass, itemValue, makeItem, temperature, type Item } from "./items";
 import type { KnowledgeId } from "./knowledge";
+import { BATTERY_CAPACITY, MODS, WEAPONS, type BeamWeapon, type ProjectileWeapon, type WeaponKind, type WeaponStats } from "./weapons";
 
 export const RAID = {
   duration: 240, // s until sunset; staying out after that = lost
@@ -17,16 +18,16 @@ export const RAID = {
     hp: 6,
     drive: 2600, // N, max push force
     drag: 580, // N·s/m, so top speed = drive/drag ≈ 4.5 m/s and τ = M/drag ≈ 0.12 s
-    fireInterval: 1 / 6,
-    autoAimRange: 9,
   },
   /** recoil dash (needs "mechanics"): a heavy slug fired backwards; feet leave the ground so drag is off while airborne */
   dash: { impulse: 600, airTime: 0.3, cooldown: 1.5 },
-  bullet: { mass: 0.5, speed: 20, life: 0.9, radius: 0.12, damage: 1 }, // mass exaggerated so momentum is felt
+  bullet: { life: 0.9, radius: 0.12 },
   sample: { radius: 0.6 },
   backpack: { w: 5, h: 3 },
   notebook: { w: 2, h: 2 }, // secure container: survives death and sunset
-  crawler: { mass: 20, radius: 0.35, hp: 4, drive: 300, drag: 100, aggro: 10, touchDamage: 1, touchCooldown: 0.8 },
+  crawler: { mass: 20, radius: 0.35, hp: 4, drive: 300, drag: 100, aggro: 10, touchDamage: 1, touchCooldown: 0.8,
+    /** a hit with knockback Δv above this lifts it off its feet (no drag, no drive) for knockAir s */
+    knockDv: 1.5, knockAir: 0.4 },
   /** ectotherm metabolism: drive scales by Q10^((T − T_ref)/10); balanced at noon heat */
   metabolism: { q10: 1.4, refTemp: 30 },
 };
@@ -34,11 +35,12 @@ export const RAID = {
 export interface Vec2 { x: number; y: number }
 export interface RaidInput { move: Vec2; fire: boolean; dash?: boolean }
 export type RaidState = "running" | "extracted" | "dead" | "lost";
-export type RaidEvent = { kind: "shot" | "hit" | "kill" | "pickup" | "full" | "drop" | "hurt" | "wall" | "dash"; x: number; y: number };
+export type RaidEvent = { kind: "shot" | "hit" | "kill" | "pickup" | "full" | "drop" | "hurt" | "wall" | "dash" | "fall" | "empty"; x: number; y: number };
 
 export interface Player { pos: Vec2; vel: Vec2; facing: Vec2; hp: number; cooldown: number; dashCooldown: number; airborne: number }
-export interface Crawler { pos: Vec2; vel: Vec2; hp: number; alive: boolean; touchCooldown: number }
-export interface Bullet { pos: Vec2; vel: Vec2; life: number }
+export interface Crawler { pos: Vec2; vel: Vec2; hp: number; alive: boolean; touchCooldown: number; airborne: number }
+export interface Bullet { pos: Vec2; vel: Vec2; life: number; mass: number; damage: number; pierce: number; hit: Set<Crawler> }
+export interface Loadout { weapon?: Item; pack?: Item[] }
 /** An item lying on the ground. `blocked` stops a full pack from re-trying it every frame until the player steps away. */
 export interface Sample { pos: Vec2; item: Item; taken: boolean; blocked: boolean }
 
@@ -71,9 +73,15 @@ export class Raid {
   private rand: () => number;
   private nightSpawnClock = 0;
   readonly knowledge: ReadonlySet<KnowledgeId>;
+  /** equipped weapon item (null = the free rifle); lost unless extracted */
+  readonly weapon: Item | null;
+  /** focused-light beam this step, for the renderer */
+  beam: { from: Vec2; to: Vec2; intensity: number } | null = null;
 
-  constructor(mapRows: string[] = FIRST_MAP, seed = 1, knowledge: Iterable<KnowledgeId> = []) {
+  constructor(mapRows: string[] = FIRST_MAP, seed = 1, knowledge: Iterable<KnowledgeId> = [], loadout: Loadout = {}) {
     this.knowledge = new Set(knowledge);
+    this.weapon = loadout.weapon ?? null;
+    for (const it of loadout.pack ?? []) this.backpack.autoPlace(it);
     this.map = parseMap(mapRows);
     this.rand = mulberry32(seed);
     const s = this.map.start;
@@ -83,7 +91,15 @@ export class Raid {
   }
 
   /** Total moving mass: body plus what is carried (F = M·a, so a heavy pack slows acceleration). */
-  get playerMass() { return RAID.player.bodyMass + this.backpack.mass + this.notebook.mass; }
+  get playerMass() { return RAID.player.bodyMass + this.backpack.mass + this.notebook.mass + (this.weapon ? itemMass(this.weapon) : 0); }
+  get weaponKind(): WeaponKind { return (this.weapon?.kind as WeaponKind | undefined) ?? "rifle"; }
+  get weaponStats(): WeaponStats { return WEAPONS[this.weaponKind]; }
+  /** Mass that takes the recoil: a stock braces the gun into the body. */
+  get recoilMass() { return this.playerMass + (this.weapon?.mods?.stock ? MODS.stockBracing : 0); }
+  get aimRange() { return this.weaponStats.range + (this.weapon?.mods?.sight ? MODS.scopeRange : 0); }
+  /** Sunlight reaching a lens, 1 at noon → 0 at sunset. */
+  get sunlight() { return this.daylight; }
+  get batteryCharge() { return this.carriedItems.reduce((e, it) => e + (it.kind === "battery" ? it.charge ?? 0 : 0), 0); }
   get carriedItems(): Item[] { return [...this.backpack.items, ...this.notebook.items]; }
   get carriedValue() { return this.carriedItems.reduce((v, it) => v + itemValue(it), 0); }
   get temperature() { return temperature(this.daylight); }
@@ -131,12 +147,12 @@ export class Raid {
   }
 
   private newCrawler(p: Vec2): Crawler {
-    return { pos: { ...p }, vel: { x: 0, y: 0 }, hp: RAID.crawler.hp, alive: true, touchCooldown: 0 };
+    return { pos: { ...p }, vel: { x: 0, y: 0 }, hp: RAID.crawler.hp, alive: true, touchCooldown: 0, airborne: 0 };
   }
 
   /** Nearest living crawler within auto-aim range with a clear line of fire. */
   autoTarget(): Crawler | null {
-    let best: Crawler | null = null, bd = RAID.player.autoAimRange;
+    let best: Crawler | null = null, bd = this.aimRange;
     for (const c of this.crawlers) {
       if (!c.alive) continue;
       const d = Math.hypot(c.pos.x - this.player.pos.x, c.pos.y - this.player.pos.y);
@@ -177,34 +193,28 @@ export class Raid {
     else this.drive(p.vel, { x: mx, y: my }, P.drive, P.drag, this.playerMass, dt);
     this.moveBody(p.pos, p.vel, P.radius, dt);
 
-    // firing: auto-aim like Soul Knight; recoil Δv = −J/M on the shooter
+    // firing: auto-aim like Soul Knight; each weapon follows its own law (weapons.ts)
     p.cooldown = Math.max(0, p.cooldown - dt);
-    if (input.fire && p.cooldown <= 0) {
-      p.cooldown = P.fireInterval;
-      const t = this.autoTarget();
-      let dx = p.facing.x, dy = p.facing.y;
-      if (t) { const d = Math.hypot(t.pos.x - p.pos.x, t.pos.y - p.pos.y); dx = (t.pos.x - p.pos.x) / d; dy = (t.pos.y - p.pos.y) / d; p.facing = { x: dx, y: dy }; }
-      const B = RAID.bullet;
-      this.bullets.push({ pos: { x: p.pos.x + dx * 0.4, y: p.pos.y + dy * 0.4 }, vel: { x: dx * B.speed, y: dy * B.speed }, life: B.life });
-      const k = (B.mass * B.speed) / this.playerMass;
-      p.vel.x -= dx * k; p.vel.y -= dy * k;
-      this.events.push({ kind: "shot", x: p.pos.x, y: p.pos.y });
-    }
+    this.beam = null;
+    const W = this.weaponStats;
+    if (input.fire && W.type === "beam") this.fireBeam(W, dt);
+    else if (input.fire && p.cooldown <= 0 && W.type === "projectile") this.fireProjectile(W);
 
-    // bullets: impulse J = m·u transfers to the target as knockback Δv = J/m_target
-    const B = RAID.bullet, C = RAID.crawler;
+    // slugs: impulse J = m·u transfers to the target as knockback Δv = J/m_target
+    const C = RAID.crawler;
     for (const b of this.bullets) {
       b.life -= dt;
       b.pos.x += b.vel.x * dt; b.pos.y += b.vel.y * dt;
       if (this.blocksBullet(b.pos.x, b.pos.y)) { b.life = 0; this.events.push({ kind: "wall", x: b.pos.x, y: b.pos.y }); continue; }
       for (const c of this.crawlers) {
-        if (!c.alive || Math.hypot(c.pos.x - b.pos.x, c.pos.y - b.pos.y) > C.radius + B.radius) continue;
-        c.hp -= B.damage;
-        c.vel.x += (b.vel.x * B.mass) / C.mass; c.vel.y += (b.vel.y * B.mass) / C.mass;
-        b.life = 0;
+        if (!c.alive || b.hit.has(c) || Math.hypot(c.pos.x - b.pos.x, c.pos.y - b.pos.y) > C.radius + RAID.bullet.radius) continue;
+        b.hit.add(c);
+        c.hp -= b.damage;
+        c.vel.x += (b.vel.x * b.mass) / C.mass; c.vel.y += (b.vel.y * b.mass) / C.mass;
+        if ((b.mass * Math.hypot(b.vel.x, b.vel.y)) / C.mass > C.knockDv) c.airborne = C.knockAir;
         if (c.hp <= 0) { c.alive = false; this.events.push({ kind: "kill", x: c.pos.x, y: c.pos.y }); }
         else this.events.push({ kind: "hit", x: c.pos.x, y: c.pos.y });
-        break;
+        if (b.hit.size >= b.pierce) { b.life = 0; break; }
       }
     }
     this.bullets = this.bullets.filter((b) => b.life > 0);
@@ -214,7 +224,17 @@ export class Raid {
       if (!c.alive) continue;
       const dx = p.pos.x - c.pos.x, dy = p.pos.y - c.pos.y, d = Math.hypot(dx, dy);
       const chase = d < C.aggro || this.time > RAID.duration * RAID.nightFrom;
-      this.drive(c.vel, chase && d > 0 ? { x: dx / d, y: dy / d } : { x: 0, y: 0 }, C.drive * this.crawlerActivity, C.drag, C.mass, dt);
+      if (c.airborne > 0) {
+        // knocked off its feet: no grip to stop at the edge, so it slides over and falls
+        c.airborne = Math.max(0, c.airborne - dt);
+        const sp = Math.hypot(c.vel.x, c.vel.y);
+        const reach = C.radius + sp * dt + 0.02; // where its edge will be after this step
+        const ahead = sp > 0 ? { x: c.pos.x + (c.vel.x / sp) * reach, y: c.pos.y + (c.vel.y / sp) * reach } : c.pos;
+        if (this.tileAt(ahead.x, ahead.y) === "~") { c.alive = false; this.events.push({ kind: "fall", x: c.pos.x, y: c.pos.y }); continue; }
+      } else {
+        // on its feet it brakes at the edge and never walks off
+        this.drive(c.vel, chase && d > 0 ? { x: dx / d, y: dy / d } : { x: 0, y: 0 }, C.drive * this.crawlerActivity, C.drag, C.mass, dt);
+      }
       this.moveBody(c.pos, c.vel, C.radius, dt);
       c.touchCooldown = Math.max(0, c.touchCooldown - dt);
       if (d < C.radius + P.radius + 0.05 && c.touchCooldown <= 0) {
@@ -277,9 +297,47 @@ export class Raid {
     return true;
   }
 
-  /** What comes home: everything on extraction, only the notebook otherwise. */
+  private aimDir(): Vec2 {
+    const p = this.player, t = this.autoTarget();
+    if (!t) return { ...p.facing };
+    const d = Math.hypot(t.pos.x - p.pos.x, t.pos.y - p.pos.y);
+    p.facing = { x: (t.pos.x - p.pos.x) / d, y: (t.pos.y - p.pos.y) / d };
+    return { ...p.facing };
+  }
+
+  /** Slug weapons. Recoil on the shooter: Δv = −J/M_recoil. A coilgun first draws E = ½mu² from a battery. */
+  private fireProjectile(W: ProjectileWeapon) {
+    const p = this.player;
+    p.cooldown = W.interval;
+    if (W.energy > 0) {
+      const cell = this.carriedItems.find((it) => it.kind === "battery" && (it.charge ?? 0) >= W.energy);
+      if (!cell) { this.events.push({ kind: "empty", x: p.pos.x, y: p.pos.y }); return; }
+      cell.charge = (cell.charge ?? BATTERY_CAPACITY) - W.energy;
+    }
+    const { x: dx, y: dy } = this.aimDir();
+    this.bullets.push({
+      pos: { x: p.pos.x + dx * 0.4, y: p.pos.y + dy * 0.4 }, vel: { x: dx * W.speed, y: dy * W.speed },
+      life: RAID.bullet.life, mass: W.mass, damage: W.damage, pierce: W.pierce, hit: new Set(),
+    });
+    const k = (W.mass * W.speed) / this.recoilMass;
+    p.vel.x -= dx * k; p.vel.y -= dy * k;
+    this.events.push({ kind: "shot", x: p.pos.x, y: p.pos.y });
+  }
+
+  /** Focused sunlight: damage rate ∝ sunlight; photon momentum p = E/c is negligible, so no knockback or recoil. */
+  private fireBeam(W: BeamWeapon, dt: number) {
+    const p = this.player, t = this.autoTarget();
+    if (!t) return;
+    this.aimDir();
+    const I = this.sunlight;
+    this.beam = { from: { ...p.pos }, to: { ...t.pos }, intensity: I };
+    t.hp -= W.dps * I * dt;
+    if (t.hp <= 0) { t.alive = false; this.events.push({ kind: "kill", x: t.pos.x, y: t.pos.y }); }
+  }
+
+  /** What comes home: everything on extraction (weapon included), only the notebook otherwise. */
   result() {
-    const items = this.state === "extracted" ? this.carriedItems : this.notebook.items;
+    const items = this.state === "extracted" ? [...this.carriedItems, ...(this.weapon ? [this.weapon] : [])] : this.notebook.items;
     return { state: this.state, items, value: Math.round(items.reduce((v, it) => v + itemValue(it), 0)) };
   }
 }

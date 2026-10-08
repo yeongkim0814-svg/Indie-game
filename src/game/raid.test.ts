@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { RAID, Raid, idleRaidInput, type RaidInput } from "./raid";
 import { makeItem } from "./items";
+import { WEAPONS, type ProjectileWeapon } from "./weapons";
+
+const RIFLE = WEAPONS.rifle as ProjectileWeapon;
 
 const DT = 1 / 120;
 const run = (r: Raid, secs: number, input: RaidInput = idleRaidInput()) => {
@@ -65,7 +68,7 @@ describe("shooting (momentum transfer)", () => {
   it("recoil Δv = J/M pushes the shooter opposite the shot", () => {
     const r = new Raid(ARENA);
     r.step(DT, { move: { x: 0, y: 0 }, fire: true });
-    const J = RAID.bullet.mass * RAID.bullet.speed;
+    const J = RIFLE.mass * RIFLE.speed;
     expect(r.player.vel.x).toBeCloseTo(-J / RAID.player.bodyMass, 3);
   });
 
@@ -80,7 +83,7 @@ describe("shooting (momentum transfer)", () => {
     }
     expect(r.crawlers[0].hp).toBe(RAID.crawler.hp - 1);
     // bullets resolve before the crawler's own drive, so the jump is J/m minus one drive step
-    const J = RAID.bullet.mass * RAID.bullet.speed;
+    const J = RIFLE.mass * RIFLE.speed;
     expect(r.crawlers[0].vel.x - before).toBeGreaterThan((J / RAID.crawler.mass) * 0.6);
   });
 

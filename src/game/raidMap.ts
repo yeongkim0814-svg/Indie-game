@@ -6,6 +6,7 @@ import type { ItemKind } from "./items";
  *   '~' cliff edge / void (blocks walkers, bullets fly over; the vista lives beyond it)
  *   'P' player start   'E' extraction zone   'c' crawler
  *   samples: 's' quartz, 'o' radioactive ore, 'b' biological specimen
+ *   found gear: 'k' stock, 'g' scope
  */
 export const FIRST_MAP = [
   "########################################~~~~~~~~",
@@ -19,7 +20,7 @@ export const FIRST_MAP = [
   "#..........c........#####.................~~~~~~",
   "#...................#####....b..........o.~~~~~~",
   "#.....o.............................c......~~~~~",
-  "#.........###..............................~~~~~",
+  "#.........###.............k................~~~~~",
   "#.........###.........c..........###.......~~~~~",
   "#.............................b..###.......~~~~~",
   "#.....c.............s......................~~~~~",
@@ -29,12 +30,12 @@ export const FIRST_MAP = [
   "#.................................c..........~~~",
   "#..o.......#####..............................~~",
   "#..........#####.......s.............EEE......~~",
-  "#....................................EEE......~~",
+  "#....g...............................EEE......~~",
   "#.............c......................EEE.......~",
   "################################################",
 ];
 
-const SAMPLE_MARKS: Record<string, ItemKind> = { s: "quartz", o: "ore", b: "bio" };
+const SAMPLE_MARKS: Record<string, ItemKind> = { s: "quartz", o: "ore", b: "bio", k: "stock", g: "scope" };
 
 export interface ParsedMap {
   w: number;

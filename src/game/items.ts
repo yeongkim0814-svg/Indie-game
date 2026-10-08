@@ -5,7 +5,9 @@
  *   bio    — spoilage with Q10 temperature dependence: dF/dt = −k_ref·Q10^((T−T_ref)/10)
  *   quartz — stable, cheap filler
  */
-export type ItemKind = "quartz" | "ore" | "bio";
+export type SampleKind = "quartz" | "ore" | "bio";
+export type GearKind = "launcher" | "lens" | "coilgun" | "battery" | "stock" | "scope";
+export type ItemKind = SampleKind | GearKind;
 
 export interface ItemDef {
   kind: ItemKind;
@@ -16,12 +18,20 @@ export interface ItemDef {
   value: number; // research value when fresh
   /** may be turned 90° in the grid */
   rotatable: boolean;
+  /** equipment: not a research sample, cannot be analysed */
+  gear?: boolean;
 }
 
 export const ITEMS: Record<ItemKind, ItemDef> = {
   quartz: { kind: "quartz", name: "석영 결정", w: 1, h: 1, mass: 0.5, value: 10, rotatable: true },
   ore: { kind: "ore", name: "방사성 광물", w: 1, h: 2, mass: 3, value: 60, rotatable: true },
   bio: { kind: "bio", name: "생물 표본", w: 2, h: 2, mass: 2, value: 50, rotatable: true },
+  launcher: { kind: "launcher", name: "운동량 발사기", w: 3, h: 1, mass: 6, value: 0, rotatable: true, gear: true },
+  lens: { kind: "lens", name: "집광 렌즈", w: 2, h: 2, mass: 3, value: 0, rotatable: true, gear: true },
+  coilgun: { kind: "coilgun", name: "코일건", w: 3, h: 1, mass: 5, value: 0, rotatable: true, gear: true },
+  battery: { kind: "battery", name: "전지", w: 1, h: 2, mass: 2, value: 0, rotatable: true, gear: true },
+  stock: { kind: "stock", name: "개머리판", w: 1, h: 1, mass: 1, value: 0, rotatable: true, gear: true },
+  scope: { kind: "scope", name: "조준경", w: 1, h: 1, mass: 0.5, value: 0, rotatable: true, gear: true },
 };
 
 export const DECAY = {
@@ -38,6 +48,22 @@ export interface Item {
   age: number;
   /** bio: 1 = fresh, 0 = rotten */
   fresh: number;
+  /** battery: stored energy in J */
+  charge?: number;
+  /** weapon attachments */
+  mods?: { stock?: Item; sight?: Item };
+}
+
+/** Grid size of an item; a fitted stock makes a weapon one cell longer (Tarkov-style). */
+export function itemSize(it: Item): { w: number; h: number } {
+  const d = ITEMS[it.kind];
+  return { w: d.w + (it.mods?.stock ? 1 : 0), h: d.h };
+}
+
+/** Mass including attachments. */
+export function itemMass(it: Item): number {
+  const m = it.mods;
+  return ITEMS[it.kind].mass + (m?.stock ? ITEMS.stock.mass : 0) + (m?.sight ? ITEMS.scope.mass : 0);
 }
 
 let nextUid = 1;

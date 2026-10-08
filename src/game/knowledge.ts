@@ -5,7 +5,7 @@
 import type { ItemKind } from "./items";
 
 export type FacilityId = "workbench" | "lab" | "observatory";
-export type KnowledgeId = "mechanics" | "radiochem" | "physiology" | "celestial";
+export type KnowledgeId = "mechanics" | "radiochem" | "physiology" | "celestial" | "electrochem";
 export type Field = "physics" | "chemistry" | "biology" | "earth";
 
 export interface FacilityDef {
@@ -27,6 +27,8 @@ export interface KnowledgeDef {
   points: number;
   /** what changes in play */
   effect: string;
+  /** cross-field nodes need their parents first */
+  requires?: KnowledgeId[];
   /** the law, and where it stops holding */
   law: string;
   limit: string;
@@ -63,6 +65,12 @@ export const KNOWLEDGE: Record<KnowledgeId, KnowledgeDef> = {
     law: "자전 각속도 ω = 2π / 하루",
     limit: "대기 굴절 때문에 실제 해는 계산보다 조금 늦게 진다",
   },
+  electrochem: {
+    id: "electrochem", name: "전기화학", field: "chemistry", facility: "lab", points: 60, requires: ["mechanics", "radiochem"],
+    effect: "광물로 전지를 만들고, 전지로 탄을 가속하는 코일건을 만들 수 있다",
+    law: "전지 에너지 → 탄의 운동 에너지 E = ½mu²",
+    limit: "실제 코일은 열로 에너지를 많이 잃는다(효율 수십 %). 게임에서는 손실을 무시한다",
+  },
 };
 
 export interface Progress {
@@ -95,6 +103,7 @@ export function buildBlocker(p: Progress, id: FacilityId, stock: Partial<Record<
 export function researchBlocker(p: Progress, id: KnowledgeId): string | null {
   const k = KNOWLEDGE[id];
   if (knows(p, id)) return "이미 앎";
+  for (const r of k.requires ?? []) if (!knows(p, r)) return `${KNOWLEDGE[r].name} 먼저`;
   if (!hasFacility(p, k.facility)) return `${FACILITIES[k.facility].name} 필요`;
   if (p.points < k.points) return `연구 점수 ${k.points} 필요`;
   return null;

@@ -1,5 +1,5 @@
 /** Tetris-style grid inventory (Tarkov): items occupy w×h cells and may be rotated 90°. */
-import { ITEMS, type Item } from "./items";
+import { ITEMS, itemMass, itemSize, type Item } from "./items";
 
 export interface Placed {
   item: Item;
@@ -9,8 +9,8 @@ export interface Placed {
 }
 
 export function footprint(item: Item, rot: boolean) {
-  const d = ITEMS[item.kind];
-  return rot ? { w: d.h, h: d.w } : { w: d.w, h: d.h };
+  const d = itemSize(item);
+  return rot ? { w: d.h, h: d.w } : d;
 }
 
 export class Grid {
@@ -69,7 +69,7 @@ export class Grid {
   }
 
   get mass(): number {
-    return this.placed.reduce((m, p) => m + ITEMS[p.item.kind].mass, 0);
+    return this.placed.reduce((m, p) => m + itemMass(p.item), 0);
   }
 
   toJSON() {
