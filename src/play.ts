@@ -26,6 +26,13 @@ declare global {
       readonly cam: { yaw: number; pitch: number; mode: string; u: number; background: number };
       readonly zone: "path" | "arena"; readonly seeThrough: number;
       readonly perf: { drawMs: number; sceneMs: number; terrainBuilds: number; terrainBuildMs: number; usedCache: boolean };
+      /** camera clamp / band / label checks: view rect and map bounds (projection px), ground rows drawn, label rects vs the player's sprite (native px) */
+      readonly view: { x0: number; y0: number; x1: number; y1: number; minX: number; minY: number; maxX: number; maxY: number; rows: { min: number; max: number } | null; lane: number | null };
+      readonly labels: { rects: { x0: number; y0: number; x1: number; y1: number }[]; player: { x0: number; y0: number; x1: number; y1: number } };
+      /** spawn a falling crawler at a world point (screenshots / tests) */
+      spawnFaller(x: number, y: number, vx: number, vy: number): void;
+      readonly fallerPixels: { hidden: number; shown: number };
+      readonly vistaClamps: number;
       paused: boolean;
       /** snap the camera to the player's zone (after a teleport) */
       snapCamera(): void;
@@ -290,6 +297,11 @@ window.__game = {
     const s = renderer.scene;
     return { drawMs: renderer.drawMs, sceneMs: s.lastMs, terrainBuilds: s.terrainBuilds, terrainBuildMs: s.terrainBuildMs, usedCache: s.usedCache };
   },
+  get view() { const s = renderer.scene; return { ...s.viewRect, rows: s.terrainRows, lane: s.bandLane }; },
+  get labels() { return { rects: renderer.labelRects, player: renderer.playerRect }; },
+  get fallerPixels() { return { hidden: renderer.scene.fallerHidden, shown: renderer.scene.fallerShown }; },
+  get vistaClamps() { return renderer.vista.edgeClamps; },
+  spawnFaller(x, y, vx, vy) { renderer.fx.fallers.push({ x, y, vx, vy, t: 0, seed: 1 }); },
   get paused() { return paused; },
   set paused(v: boolean) { paused = v; },
   snapCamera() { renderer.snapCamera(raid); },

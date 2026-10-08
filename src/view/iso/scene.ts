@@ -2,9 +2,9 @@ import { RAID, type Raid } from "../../game/raid";
 import { hash2 } from "../palette";
 import { Effects, FALL_TIME } from "./effects";
 import { Fb, hexN, mixC } from "./raster";
-import { PITCH_ISO, PITCH_SIDE, YAW_ISO, depthOf, faceVisible, makeView, project, type View } from "./project";
+import { PITCH_ISO, YAW_ISO, depthOf, faceVisible, makeView, project, type View } from "./project";
 import { drawBeam, drawBullet, drawCrawler, drawPlayer, drawSample, shadow } from "./sprites";
-import { MapGeo, R, ROCK_H, SIDES, TerrainCache, drawTerrain, makeScr, pitchK, sideFace, topFace, type Scr, type Tile } from "./terrain";
+import { MIN_WEIGHT, MapGeo, R, ROCK_H, SIDES, SLAB_D, TerrainCache, bodyWeight, clamp, drawTerrain, fade, makeScr, pitchK, rowWeight, sideFace, topFace, type Band, type Scr, type Tile } from "./terrain";
 
 export interface SceneFrame {
   raid: Raid;
@@ -15,6 +15,25 @@ export interface SceneFrame {
   /** camera not swinging: the cached terrain may be used */
   settled: boolean;
   fx: Effects;
+  /** camera I weight (rig.background) and the lane the side-view band is centred on (null = no ledge seen yet) */
+  b: number;
+  lane: number | null;
+}
+
+/** Keep the view span [off, off + size] inside [min, max]; a map smaller than the view is centred. */
+export function clampAxis(off: number, min: number, max: number, size: number): number {
+  return max - min <= size ? (min + max) / 2 - size / 2 : clamp(off, min, max - size);
+}
+
+/** Screen bounding box of the projected map rectangle (ground plane down to the slab bottom), in projection pixels. */
+export function mapBounds(v: View, w: number, h: number) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const pr = { sx: 0, sy: 0, depth: 0 };
+  for (const [x, y] of [[0, 0], [w, 0], [w, h], [0, h]]) for (const z of [0, -SLAB_D]) {
+    project(v, x, y, z, pr);
+    minX = Math.min(minX, pr.sx); maxX = Math.max(maxX, pr.sx); minY = Math.min(minY, pr.sy); maxY = Math.max(maxY, pr.sy);
+  }
+  return { minX, minY, maxX, maxY };
 }
 
 function cross(o: number[], a: number[], b: number[]) { return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]); }
@@ -33,7 +52,7 @@ function inside(poly: number[][], x: number, y: number) {
   return true;
 }
 
-const VIEW_I = makeView(0, PITCH_SIDE), VIEW_II = makeView(YAW_ISO, PITCH_ISO);
+const VIEW_II = makeView(YAW_ISO, PITCH_ISO);
 interface Item { key: number; draw: () => void }
 
 /**
@@ -56,9 +75,22 @@ export class Scene {
   lastMs = 0;
   usedCache = false;
   private settledFrames = 0;
+  private spriteFb = new Fb(1, 1);
+  private halfFb = new Fb(1, 1);
+  private maskFb = new Fb(1, 1);
+  /** ground rows drawn this frame (min / max row index, or null) and fallers drawn this frame; camera I band checks */
+  terrainRows: { min: number; max: number } | null = null;
+  bandLane: number | null = null;
+  /** faller sprite pixels hidden / drawn behind nearer ground since the start (tests: far-edge falls hide, near-edge falls do not) */
+  fallerHidden = 0;
+  fallerShown = 0;
+  /** the view rectangle and the map bounds of the last frame, in projection pixels */
+  viewRect = { x0: 0, y0: 0, x1: 0, y1: 0, minX: 0, minY: 0, maxX: 0, maxY: 0 };
 
   resize(w: number, h: number) {
     this.fb = new Fb(w, h);
+    this.spriteFb = new Fb(w, h);
+    this.maskFb = new Fb(w, h);
     this.cv.width = w; this.cv.height = h;
   }
 
@@ -89,23 +121,38 @@ export class Scene {
     const geo = this.geo, cache = this.cache!;
     fb.clear();
     const f0 = project(v, f.focus.x, f.focus.y, 0);
-    const offX = Math.round(f0.sx - W / 2), offY = Math.round(f0.sy - H * 0.6);
+    // camera clamp: the view stays inside the projected map (a map smaller than the view is centred). Vertically the side view
+    // keeps the ledge at a fixed height instead (the vista above and below is the intended backdrop), so that clamp fades in with the swing.
+    const bd = mapBounds(v, geo.map.rows[0]?.length ?? 0, geo.map.rows.length);
+    const rawX = Math.round(f0.sx - W / 2), rawY = Math.round(f0.sy - H * 0.6);
+    const offX = Math.round(clampAxis(rawX, bd.minX, bd.maxX, W));
+    const cy = clampAxis(rawY, bd.minY, bd.maxY, H), offY = Math.round(rawY + (cy - rawY) * (1 - f.b));
     this.view = v; this.offX = offX; this.offY = offY;
+    this.viewRect = { x0: offX, y0: offY, x1: offX + W, y1: offY + H, ...bd };
     const scr = makeScr(v, offX, offY);
     const k = pitchK(v);
+    const band: Band | null = f.lane !== null && f.b > 0.001 ? { lane: f.lane, b: f.b } : null;
+    this.bandLane = band ? band.lane : null;
 
     // ---- terrain
-    this.usedCache = f.settled;
-    if (f.settled) cache.blit(fb, v, offX, offY);
-    const rocks: { tile: Tile; d: number }[] = [];
+    const cached = f.settled && (!band || band.b >= 0.999);
+    this.usedCache = cached;
+    if (cached) cache.blit(fb, v, offX, offY, band);
+    const rocks: { tile: Tile; d: number; w: number }[] = [];
     const live: Tile[] = [];
+    let rowMin = Infinity, rowMax = -Infinity;
     for (const tile of geo.tiles) {
+      const rw = rowWeight(band, tile.ty);
+      if (rw < MIN_WEIGHT) continue;
+      rowMin = Math.min(rowMin, tile.ty); rowMax = Math.max(rowMax, tile.ty);
       const [sx, sy] = scr(tile.tx + 0.5, tile.ty + 0.5, 0);
       if (sx < -50 || sx > W + 50 || sy < -60 || sy > H + 70) continue;
-      if (!f.settled) live.push(tile);
-      if (tile.ch === "#") rocks.push({ tile, d: depthOf(v, tile.tx + 0.5, tile.ty + 0.5, 0) });
+      if (!cached) live.push(tile);
+      const bw = bodyWeight(band, tile.ty);
+      if (tile.ch === "#" && bw >= MIN_WEIGHT) rocks.push({ tile, d: depthOf(v, tile.tx + 0.5, tile.ty + 0.5, 0), w: bw });
     }
-    if (!f.settled) drawTerrain(fb, v, scr, geo, live);
+    this.terrainRows = rowMin <= rowMax ? { min: rowMin, max: rowMax } : null;
+    if (!cached) this.swingTerrain(v, scr, geo, live, band);
 
     // ---- ground markings: extraction ring, physiology aggro rings
     const ex = raid.map.extraction;
@@ -133,28 +180,30 @@ export class Scene {
     // ---- rocks and billboards, one painter's sort
     const items: Item[] = [];
     for (const r of rocks) {
-      const { tx, ty } = r.tile, outline = see.get(ty * 4096 + tx), dither = !!outline;
+      const { tx, ty } = r.tile, outline = see.get(ty * 4096 + tx), rf = fade(r.w, band);
+      if (!rf) continue;
+      const dither = !!outline || rf.dither, rw = rf.a;
       items.push({ key: r.d, draw: () => {
         const h = hash2(tx, ty, 5);
         const base = R[3], tcol = [R[4], mixC(R[3], R[4], 0.6), mixC(R[4], hexN("#a3cfe3"), 0.15)][Math.floor(h * 3)];
         for (const n of SIDES) {
           if (!faceVisible(v, n[0], n[1], 0) || geo.ch(tx + n[0], ty + n[1]) === "#") continue;
-          sideFace(fb, v, scr, tx, ty, n, 0, ROCK_H, base, 1, mixC(base, R[1], 0.5), undefined, 1, dither);
+          sideFace(fb, v, scr, tx, ty, n, 0, ROCK_H, base, rw, mixC(base, R[1], 0.5), undefined, 1, dither);
         }
-        if (faceVisible(v, 0, 0, 1)) topFace(fb, scr, tx, ty, ROCK_H, tcol, dither);
+        if (faceVisible(v, 0, 0, 1)) topFace(fb, scr, tx, ty, ROCK_H, tcol, dither, rw);
         if (outline) for (let i = 0; i < outline.length; i++) { const p0 = outline[i], p1 = outline[(i + 1) % outline.length]; fb.line(p0[0], p0[1], p1[0], p1[1], 0xcfe6ee); }
       } });
     }
     const feet = (x: number, y: number, z = 0): [number, number] => { const q = scr(x, y, z); return [Math.round(q[0]), Math.round(q[1])]; };
     const onScreen = (sx: number, sy: number) => sx >= -12 && sx <= W + 12 && sy >= -12 && sy <= H + 30;
     raid.samples.forEach((s, i) => {
-      if (s.taken) return;
+      if (s.taken || bodyWeight(band, Math.floor(s.pos.y)) < 0.5) return;
       const [sx, sy] = feet(s.pos.x, s.pos.y);
       if (!onScreen(sx, sy)) return;
       items.push({ key: depthOf(v, s.pos.x, s.pos.y, 0), draw: () => drawSample(fb, v, sx, sy, i, s.item, f.t) });
     });
     for (const c of raid.crawlers) {
-      if (!c.alive) continue;
+      if (!c.alive || bodyWeight(band, Math.floor(c.pos.y)) < 0.5) continue;
       const [sx, sy0] = feet(c.pos.x, c.pos.y);
       if (!onScreen(sx, sy0)) continue;
       items.push({ key: depthOf(v, c.pos.x, c.pos.y, 0), draw: () => {
@@ -164,11 +213,12 @@ export class Scene {
       } });
     }
     for (const fl of fx.fallers) {
+      if (bodyWeight(band, Math.floor(fl.y)) < 0.5) continue;
       const [sx, sy0] = feet(fl.x, fl.y);
       if (!onScreen(sx, sy0 + 40)) continue;
       items.push({ key: depthOf(v, fl.x, fl.y, 0), draw: () => {
         const kk = fl.t / FALL_TIME, [, sy] = feet(fl.x, fl.y, Effects.fallZ(fl.t));
-        drawCrawler(fb, sx, sy, f.t * 2, fl.seed, false, Math.max(0, 1 - kk * kk));
+        this.drawFaller(v, scr, geo, band, fl.x, fl.y, sx, sy, f.t * 2, fl.seed, Math.max(0, 1 - kk * kk));
       } });
     }
     const wk = raid.weaponKind;
@@ -202,9 +252,52 @@ export class Scene {
     this.lastMs = performance.now() - t0;
     // warm the other camera's cache on a later frame so the first ledge entry does not hitch
     this.settledFrames = f.settled ? this.settledFrames + 1 : 0;
-    if (this.settledFrames === 6) {
-      const other = Math.abs(v.yaw) < 1e-6 ? VIEW_II : VIEW_I;
-      if (!cache.has(other)) cache.build(other);
+    if (this.settledFrames === 6 && !band) { // camera I caches are per lane band (small); only camera II is warmed
+      if (!cache.has(VIEW_II)) cache.build(VIEW_II);
+    }
+  }
+
+  /**
+   * The swing re-rasterises the whole map every frame, which is what a phone cannot afford. The picture is in motion anyway, so
+   * the terrain is painted at half the horizontal resolution (x halved, then every column doubled); sprites stay full resolution.
+   */
+  private swingTerrain(v: View, scr: Scr, geo: MapGeo, tiles: Tile[], band: Band | null) {
+    const fb = this.fb, hw = (fb.w + 1) >> 1;
+    if (this.halfFb.w !== hw || this.halfFb.h !== fb.h) this.halfFb = new Fb(hw, fb.h);
+    const half = this.halfFb;
+    half.clear();
+    drawTerrain(half, v, (x, y, z) => { const q = scr(x, y, z); return [q[0] / 2, q[1]]; }, geo, tiles, band, false);
+    const src = half.u32, dst = fb.u32, W = fb.w;
+    for (let y = 0; y < fb.h; y++) {
+      const o = y * W, h = y * hw;
+      for (let x = 0; x < W; x++) dst[o + x] = src[h + (x >> 1)];
+    }
+  }
+
+  /**
+   * A crawler dropping off a cliff is below the slab top, so ground nearer to the camera than its column hides it (it fell off the
+   * far side), while the cliff face behind it does not (it fell off the near side). It is painted into a scratch buffer and copied
+   * over only where none of those nearer tiles has a pixel.
+   */
+  private drawFaller(v: View, scr: Scr, geo: MapGeo, band: Band | null, x: number, y: number, sx: number, sy: number, t: number, seed: number, a: number) {
+    const fb = this.fb, sp = this.spriteFb, mk = this.maskFb, d = depthOf(v, x, y, 0);
+    const x0 = Math.max(0, sx - 12), x1 = Math.min(fb.w, sx + 13), y0 = Math.max(0, sy - 30), y1 = Math.min(fb.h, sy + 10);
+    if (x1 <= x0 || y1 <= y0) return;
+    const near: Tile[] = [];
+    for (const tl of geo.tiles) {
+      if (depthOf(v, tl.tx + 0.5, tl.ty + 0.5, 0) <= d + 0.01 || rowWeight(band, tl.ty) < MIN_WEIGHT) continue;
+      const [tx, ty] = scr(tl.tx + 0.5, tl.ty + 0.5, 0);
+      if (tx > x0 - 28 && tx < x1 + 28 && ty > y0 - 14 - SLAB_D * 16 && ty < y1 + 24) near.push(tl);
+    }
+    for (let yy = y0; yy < y1; yy++) { sp.u32.fill(0, yy * sp.w + x0, yy * sp.w + x1); mk.u32.fill(0, yy * mk.w + x0, yy * mk.w + x1); }
+    drawCrawler(sp, sx, sy, t, seed, false, a);
+    if (near.length) drawTerrain(mk, v, scr, geo, near, band);
+    for (let yy = y0; yy < y1; yy++) for (let xx = x0; xx < x1; xx++) {
+      const i = yy * fb.w + xx, p = sp.u32[i];
+      if ((p >>> 24) === 0) continue;
+      if ((mk.u32[i] >>> 24) !== 0) { this.fallerHidden++; continue; }
+      this.fallerShown++;
+      fb.px(xx, yy, ((p & 255) << 16) | (((p >> 8) & 255) << 8) | ((p >> 16) & 255), (p >>> 24) / 255);
     }
   }
 

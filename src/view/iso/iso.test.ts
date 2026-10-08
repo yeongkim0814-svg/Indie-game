@@ -4,6 +4,8 @@ import { Raid, idleRaidInput } from "../../game/raid";
 import { PITCH_ISO, PITCH_SIDE, YAW_ISO, depthOf, faceVisible, makeView, project } from "./project";
 import { CameraRig, TRANSITION } from "./camera";
 import { controls, laneCentre } from "./controls";
+import { bandRowAlpha, bodyWeight, fade, rowWeight } from "./terrain";
+import { clampAxis, mapBounds } from "./scene";
 
 describe("projection", () => {
   it("side view: screenY = -z*S, depth = y, no top face", () => {
@@ -66,5 +68,32 @@ describe("zone-driven controls", () => {
     }
     expect(raid.player.pos.x).toBeGreaterThan(34);
     expect(maxDev).toBeLessThan(0.5);
+  });
+});
+
+describe("camera I band and camera clamp", () => {
+  it("band: solid around the lane, fading to the back, cut in front and beyond lane-4 / lane+4", () => {
+    const lane = 9;
+    expect(bandRowAlpha(8, lane)).toBe(1); expect(bandRowAlpha(9, lane)).toBe(1); expect(bandRowAlpha(10, lane)).toBe(1);
+    expect(bandRowAlpha(6, lane)).toBeLessThan(1); expect(bandRowAlpha(6, lane)).toBeGreaterThan(0);
+    expect(bandRowAlpha(4, lane)).toBe(0); expect(bandRowAlpha(12, lane)).toBe(0);
+    for (let ty = 0; ty < 30; ty++) if (bandRowAlpha(ty, lane) > 0) expect(Math.abs(ty + 0.5 - lane)).toBeLessThanOrEqual(4);
+  });
+  it("swing blends the band with the full map; rocks never stand in front of the lane", () => {
+    expect(rowWeight(null, 20)).toBe(1);
+    expect(rowWeight({ lane: 9, b: 0 }, 20)).toBe(1);
+    expect(rowWeight({ lane: 9, b: 1 }, 20)).toBe(0);
+    expect(rowWeight({ lane: 9, b: 0.5 }, 20)).toBeCloseTo(0.5);
+    expect(bodyWeight({ lane: 9, b: 1 }, 11)).toBe(0);
+    expect(fade(0.5, { lane: 9, b: 1 })).toEqual({ a: 1, dither: true });
+    expect(fade(0.1, { lane: 9, b: 1 })).toBeNull();
+  });
+  it("clampAxis keeps the view inside the bounds and centres a map smaller than the view", () => {
+    expect(clampAxis(-50, 0, 1000, 400)).toBe(0);
+    expect(clampAxis(900, 0, 1000, 400)).toBe(600);
+    expect(clampAxis(300, 0, 1000, 400)).toBe(300);
+    expect(clampAxis(10, 0, 100, 400)).toBe(-150);
+    const b = mapBounds(makeView(0, PITCH_SIDE), 72, 26);
+    expect(b.minX).toBe(0); expect(b.maxX).toBeCloseTo(72 * 16);
   });
 });

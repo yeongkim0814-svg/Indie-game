@@ -14,11 +14,14 @@ const LW = 960; // period of the procedural layers (they wrap horizontally)
 const PAD = 64; // extra rows below a layer so vertical parallax never exposes a gap
 const TAU = Math.PI * 2;
 
+/** sky art: x origin at the map's left edge and parallax */
+const SKY_SHIFT = 100, SKY_PAR = 0.05;
+
 /** A text label in vista space (x, y in 180 px-tall logical pixels). */
 export interface VistaLabel { text: string; x: number; y: number; align: "left" | "center"; tick?: boolean }
 
 export interface VistaState {
-  /** parallax reference: camera centre in world pixels, minus the vista's own half size */
+  /** parallax reference: how far the camera has travelled from the map's left edge, in map pixels (>= 0) */
   cx: number; cy: number;
   t: number;
   daylight: number;
@@ -27,16 +30,23 @@ export interface VistaState {
   look: number;
   /** is this vista-space point visible through the cliff (not covered by ground)? labels are only placed there */
   isVoid: (x: number, y: number) => boolean;
+  /** width (vista px) of a label's text, and whether a vista-space box (centre line y0..y1) is clear of the player and the HUD */
+  textW: (text: string) => number;
+  free: (x0: number, y0: number, x1: number, y1: number) => boolean;
 }
 
-interface Ridge { key: "far" | "mid" | "near"; par: number; base: number; amp: number; n1: number; n2: number; col: string; seed: number; strata?: { d: number[]; tint: string[] } }
+/**
+ * art: where the painted layer sits. Its x origin is `shift` (art px) when the camera is at the map's left edge and advances by
+ * `par` per map px travelled (clamped to the art width, so its ends never show); dy moves it down in vista space.
+ */
+interface Ridge { key: "far" | "mid" | "near"; par: number; base: number; amp: number; n1: number; n2: number; col: string; seed: number; strata?: { d: number[]; tint: string[] }; shift: number; dy: number }
 
 const RIDGES: Ridge[] = [
-  { key: "far", par: 0.15, base: 0.58, amp: 14, n1: 3, n2: 9, col: hex(mix(HAZE, ROCK[4], 0.35)), seed: 1.3,
+  { key: "far", par: 0.15, base: 0.58, amp: 14, n1: 3, n2: 9, col: hex(mix(HAZE, ROCK[4], 0.35)), seed: 1.3, shift: 470, dy: 8,
     strata: { d: [0, 8, 17, 28], tint: ["#c9b690", "#b58f68", "#8a6a58", "#5f4b47"] } },
-  { key: "mid", par: 0.3, base: 0.7, amp: 16, n1: 3, n2: 8, col: hex(mix(HAZE, ROCK[4], 0.7)), seed: 4.1,
+  { key: "mid", par: 0.3, base: 0.7, amp: 16, n1: 3, n2: 8, col: hex(mix(HAZE, ROCK[4], 0.7)), seed: 4.1, shift: 60, dy: 22,
     strata: { d: [0, 9, 19, 31], tint: ["#a99a86", "#8f7461", "#6a5650", "#46393d"] } },
-  { key: "near", par: 0.5, base: 0.82, amp: 12, n1: 4, n2: 11, col: ROCK[3], seed: 7.7 },
+  { key: "near", par: 0.5, base: 0.82, amp: 12, n1: 4, n2: 11, col: ROCK[3], seed: 7.7, shift: 650, dy: 0 },
 ];
 
 /** "rgb(r,g,b)" -> "#rrggbb" (palette.mix returns rgb strings; blending needs hex). */
@@ -65,6 +75,9 @@ export class Vista {
   private sky: HTMLCanvasElement | null = null;
   private plain = new Map<string, HTMLCanvasElement>();
   private fieldLines: HTMLCanvasElement | null = null;
+  /** how often a painted layer hit the end of its art (the clamp engaged); the tuned travel should keep this at 0 on the first map */
+  edgeClamps = 0;
+  private crests = new Map<HTMLImageElement, { top: Int16Array; bot: Int16Array }>();
 
   private buildSky() {
     const c = makeCanvas(1, VISTA_H), g = c.getContext("2d")!;
@@ -102,25 +115,78 @@ export class Vista {
     return c;
   }
 
-  /** Painted layers are not tileable: scroll them with the parallax factor and clamp at both ends. */
-  private drawArt(g: CanvasRenderingContext2D, img: HTMLImageElement, par: number, st: VistaState, W: number) {
-    const ox = Math.max(0, Math.min(Math.round(st.cx * par), Math.max(0, img.width - W)));
-    g.drawImage(img, -ox, 0);
-    if (img.width - ox < W) g.drawImage(img, img.width - ox, 0); // image narrower than the view: repeat
+  /** Per-column top / bottom row of the opaque pixels of a painted layer (-1 = empty column). */
+  private crestOf(img: HTMLImageElement) {
+    let c = this.crests.get(img);
+    if (c) return c;
+    const w = img.width, h = img.height, top = new Int16Array(w).fill(-1), bot = new Int16Array(w).fill(-1);
+    try {
+      const cv = makeCanvas(w, h), g = cv.getContext("2d")!;
+      g.drawImage(img, 0, 0);
+      const d = g.getImageData(0, 0, w, h).data;
+      for (let x = 0; x < w; x++) for (let y = 0; y < h; y++) if (d[(y * w + x) * 4 + 3] > 127) { if (top[x] < 0) top[x] = y; bot[x] = y; }
+    } catch { /* tainted canvas: no crest data, strata and herd fall back to the procedural ridge height */ }
+    c = { top, bot };
+    this.crests.set(img, c);
+    return c;
+  }
+
+  /** Painted layers are not tileable: x origin = shift + travel * parallax, clamped so the ends of the art never show. */
+  private artOx(img: HTMLImageElement, shift: number, par: number, st: VistaState, W: number) {
+    const raw = Math.round(shift + st.cx * par), ox = Math.max(0, Math.min(raw, Math.max(0, img.width - W)));
+    if (ox !== raw) this.edgeClamps++;
+    return ox;
+  }
+  private drawArt(g: CanvasRenderingContext2D, img: HTMLImageElement, ox: number, dy: number, W: number) {
+    g.drawImage(img, -ox, dy);
+    if (img.width - ox < W) g.drawImage(img, img.width - ox, dy); // image narrower than the view: repeat
+  }
+
+  /** Layer x origin for this frame (art or procedural) and the screen / crest lookups that labels, strata and the herd use. */
+  private origin(r: Ridge, st: VistaState, W: number) {
+    const art = this.art[r.key];
+    return art ? this.artOx(art, r.shift, r.par, st, W) : Math.round(st.cx * r.par);
+  }
+  private crest(r: Ridge, wx: number, st: VistaState): number {
+    const art = this.art[r.key];
+    if (art) {
+      const c = this.crestOf(art), i = Math.max(0, Math.min(art.width - 1, wx));
+      if (c.top[i] >= 0) return c.top[i] + r.dy;
+    }
+    return ridgeY(r, wx) - Math.round(st.cy * r.par * 0.5);
+  }
+
+  /** Strata on a painted layer: translucent age bands under its crest, with a light line at each boundary. */
+  private artStrata(g: CanvasRenderingContext2D, r: Ridge, st: VistaState, W: number) {
+    const art = this.art[r.key], S = r.strata;
+    if (!art || !S) return;
+    const c = this.crestOf(art), ox = this.origin(r, st, W);
+    for (let x = 0; x < W; x++) {
+      const wx = ox + x;
+      if (wx >= art.width || c.top[wx] < 0) continue;
+      const top = c.top[wx] + r.dy, bot = c.bot[wx] + r.dy + 1;
+      for (let i = 0; i < S.d.length; i++) {
+        const y0 = Math.max(top, top + S.d[i] + (i ? fold(i, wx) : 0)), y1 = Math.min(bot, i + 1 < S.d.length ? top + S.d[i + 1] + fold(i + 1, wx) : bot);
+        if (y1 <= y0) continue;
+        g.globalAlpha = 0.32; g.fillStyle = S.tint[i]; g.fillRect(x, y0, 1, y1 - y0);
+        if (i) { g.globalAlpha = 0.45; g.fillStyle = "#fff4d6"; g.fillRect(x, y0, 1, 1); }
+      }
+    }
+    g.globalAlpha = 1;
   }
 
   private drawRidge(g: CanvasRenderingContext2D, r: Ridge, st: VistaState, W: number, strata: boolean) {
     const art = this.art[r.key];
-    if (art) { this.drawArt(g, art, r.par, st, W); return; }
+    if (art) { this.drawArt(g, art, this.origin(r, st, W), r.dy, W); if (strata) this.artStrata(g, r, st, W); return; }
     const c = this.ridge(r, strata);
     const ox = Math.round(st.cx * r.par), oy = Math.round(st.cy * r.par * 0.5);
     const x0 = -(((ox % LW) + LW) % LW);
     for (let x = x0; x < W; x += LW) g.drawImage(c, x, -oy);
   }
 
-  /** Screen-space x (vista space) of a layer coordinate. */
-  private lx(r: Ridge, wx: number, st: VistaState) { return Math.round(wx - st.cx * r.par); }
-  private ly(r: Ridge, wx: number, st: VistaState, dy: number) { return ridgeY(r, wx) + dy - Math.round(st.cy * r.par * 0.5); }
+  /** Screen-space x (vista space) of a layer coordinate, and the y of a point `dy` below the layer's crest there. */
+  private lx(r: Ridge, wx: number, st: VistaState, W: number) { return wx - this.origin(r, st, W); }
+  private ly(r: Ridge, wx: number, st: VistaState, dy: number) { return this.crest(r, wx, st) + dy; }
 
   /** Draws the whole vista into g (a W x 180 canvas) and returns its labels. */
   draw(g: CanvasRenderingContext2D, W: number, st: VistaState): VistaLabel[] {
@@ -129,7 +195,7 @@ export class Vista {
     g.imageSmoothingEnabled = false;
 
     // ---- sky
-    if (this.art.sky) this.drawArt(g, this.art.sky, 0.05, st, W);
+    if (this.art.sky) this.drawArt(g, this.art.sky, this.artOx(this.art.sky, SKY_SHIFT, SKY_PAR, st, W), 0, W);
     else {
       this.sky ??= this.buildSky();
       g.drawImage(this.sky, 0, 0, 1, VISTA_H, 0, 0, W, VISTA_H);
@@ -178,6 +244,8 @@ export class Vista {
           const b = Math.PI + (Math.PI * k) / n;
           g.fillRect(Math.round(cx + Math.cos(b) * o.rx), Math.round(cy + Math.sin(b) * o.ry), 1, 1);
         }
+        g.fillStyle = "rgba(20,38,56,0.7)"; // dark rim so the pale disc reads over clouds
+        for (let dy = -o.r - 1; dy <= o.r + 1; dy++) { const w = Math.floor(Math.sqrt((o.r + 1) * (o.r + 1) + 0.5 - dy * dy)); g.fillRect(mx - w, my + dy, w * 2 + 1, 1); }
         g.fillStyle = o.col;
         for (let dy = -o.r; dy <= o.r; dy++) { const w = Math.floor(Math.sqrt(o.r * o.r + 0.5 - dy * dy)); g.fillRect(mx - w, my + dy, w * 2 + 1, 1); }
         g.fillStyle = o.shade; // night side: a crescent shadow
@@ -250,11 +318,13 @@ export class Vista {
       { r: mid, d: 38, text: "4.1억 년" },
     ];
     let lastY = -99;
+    const midOx = this.origin(mid, st, W);
     for (const s of spots) {
-      // the right-most spot where the band is visible through the cliff, pinned to the screen
-      for (let f = 0.78; f > 0.4; f -= 0.03) {
-        const x = Math.round(W * f), y = this.ly(s.r, x + Math.round(st.cx * s.r.par), st, s.d);
-        if (y - lastY < 9 || y > VISTA_H - 4 || !st.isVoid(x, y) || !st.isVoid(x + 44, y)) continue;
+      // the right-most spot where the band is visible through the cliff (and not hidden behind the mid layer), clear of the player and the HUD
+      for (let f = 0.78; f > 0.3; f -= 0.03) {
+        const x = Math.round(W * f), y = this.ly(s.r, x + this.origin(s.r, st, W), st, s.d), w = 9 + st.textW(s.text);
+        if (y - lastY < 9 || y > VISTA_H - 4 || !st.isVoid(x, y) || !st.isVoid(x + w, y) || !st.free(x, y, x + w, y)) continue;
+        if (s.r === far && (this.crest(mid, x + midOx, st) < y + 5 || this.crest(mid, x + w + midOx, st) < y + 5)) continue;
         labels.push({ text: s.text, x, y, align: "left", tick: true });
         lastY = y;
         break;
@@ -264,20 +334,20 @@ export class Vista {
 
   // ---------------------------------------------------------------- physiology
   private drawHerd(g: CanvasRenderingContext2D, mid: Ridge, st: VistaState, W: number) {
-    const t = st.t;
-    // dotted migration path along the crest, a few pixels above it
-    g.fillStyle = "rgba(252,251,246,0.85)";
-    const wxA = Math.round(st.cx * mid.par) - 8;
-    for (let wx = wxA - (wxA % 6); wx < wxA + W + 16; wx += 6) {
-      g.fillRect(wx - Math.round(st.cx * mid.par), this.ly(mid, wx, st, -7), 2, 1);
+    const t = st.t, ox = this.origin(mid, st, W);
+    // dotted migration path along the crest, a few pixels above it (white with a dark under-line so it reads over sky and rock alike)
+    for (let x = -(ox % 6); x < W + 6; x += 6) {
+      const y = this.ly(mid, x + ox, st, -7);
+      g.fillStyle = "rgba(24,40,52,0.55)"; g.fillRect(x, y + 1, 2, 1);
+      g.fillStyle = "rgba(252,251,246,0.9)"; g.fillRect(x, y, 2, 1);
     }
     // the herd ambles back and forth along it
     // (pinned to the screen's right side: that is where the cliff opens onto the vista)
-    const hc = Math.round(W * 0.72 + 40 * Math.sin(t * 0.035) + st.cx * mid.par), dir = Math.cos(t * 0.035) >= 0 ? 1 : -1;
+    const hc = Math.round(W * 0.72 + 40 * Math.sin(t * 0.035) + ox), dir = Math.cos(t * 0.035) >= 0 ? 1 : -1;
     const dark = ROCK[1], light = ROCK[2];
     for (let i = 0; i < 7; i++) {
       const wx = Math.round(hc + (i - 3) * 8 + (i % 2) * 3);
-      const x = this.lx(mid, wx, st), y = this.ly(mid, wx, st, -1);
+      const x = this.lx(mid, wx, st, W), y = this.ly(mid, wx, st, -1);
       if (x < -6 || x > W + 6) continue;
       const step = Math.floor(t * 2 + i) & 1;
       const tall = i === 2 || i === 5;

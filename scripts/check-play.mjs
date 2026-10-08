@@ -493,6 +493,33 @@ try {
   expect(info.perfArena.usedCache, "settled camera should blit the cached terrain");
   expect(info.perfArena.terrainBuilds >= 1, "terrain cache never built");
 
+  // 1b. camera clamp: in the start arena corners the view stays inside the projected map (no area beyond the map rectangle)
+  const inMap = (v, yAxis = true) => v.x0 >= v.minX - 0.5 && v.x1 <= v.maxX + 0.5 && (!yAxis || (v.y0 >= v.minY - 0.5 && v.y1 <= v.maxY + 0.5));
+  for (const [cx, cy, name] of [[4.5, 6.5, "NW"], [2.5, 20.5, "SW"], [18.5, 20.5, "SE"], [16.5, 6.5, "NE"], [2.5, 12.5, "W edge"]]) {
+    await ev(([x, y]) => { const r = window.__game.raid; r.crawlers.forEach((k) => (k.alive = false)); r.player.pos.x = x; r.player.pos.y = y; r.player.vel.x = r.player.vel.y = 0; r.player.hp = 99; window.__game.snapCamera(); }, [cx, cy]);
+    await frames(6);
+    const vw = await ev(() => ({ ...window.__game.view }));
+    expect(inMap(vw), `camera II view leaves the map at the ${name} corner: ` + JSON.stringify(vw));
+  }
+  await teleport(5, 13);
+
+  // 1c. falling crawlers: off a far-side (north) edge the slab in front hides them, off a near-side (south) edge they stay in front of the cliff face
+  await ev(() => { window.__game.raid.crawlers.forEach((k) => (k.alive = false)); });
+  await teleport(10, 14);
+  await frames(4);
+  const fp0 = await ev(() => ({ ...window.__game.fallerPixels }));
+  await ev(() => window.__game.spawnFaller(10, 22.4, 0, 1));
+  await frames(25);
+  const fp1 = await ev(() => ({ ...window.__game.fallerPixels }));
+  await frames(40);
+  await ev(() => window.__game.spawnFaller(10, 5.7, 0, -1));
+  await frames(25);
+  const fp2 = await ev(() => ({ ...window.__game.fallerPixels }));
+  info.faller = { nearEdge: { shown: fp1.shown - fp0.shown, hidden: fp1.hidden - fp0.hidden }, farEdge: { shown: fp2.shown - fp1.shown, hidden: fp2.hidden - fp1.hidden } };
+  expect(info.faller.nearEdge.shown > 20 && info.faller.nearEdge.hidden === 0, "a crawler falling off a near-side edge should stay in front of the cliff: " + JSON.stringify(info.faller));
+  expect(info.faller.farEdge.hidden > 20, "a crawler falling off a far-side edge should be hidden by the ground in front: " + JSON.stringify(info.faller));
+  await frames(40);
+
   // 2. see-through: stand directly behind a rock as seen from the camera (the camera sits toward -x,+y)
   const rock = await ev(() => {
     const rows = window.__game.raid.map.rows;
@@ -542,6 +569,13 @@ try {
   expect((await ev(() => window.__game.zone)) === "path", "ledge zone should be path");
   expect(!(await vis("#btn-fire")), "fire button should be hidden on a ledge");
   info.perfLedge = await ev(() => ({ ...window.__game.perf, fps: window.__fps }));
+  // camera I draws only a band of rows around the lane (the stacked-stripe clutter of the arenas edge-on is gone)
+  const bandView = await ev(() => ({ ...window.__game.view }));
+  info.band = { lane: bandView.lane, rows: bandView.rows };
+  expect(bandView.lane === 9 && bandView.rows && bandView.rows.min >= 9 - 4 && bandView.rows.max <= 9 + 4, "camera I drew terrain rows outside lane+-4: " + JSON.stringify(info.band));
+  expect(info.perfLedge.usedCache, "settled camera I should blit its (band) terrain cache");
+  expect(inMap(bandView, false), "camera I view leaves the map horizontally: " + JSON.stringify(bandView));
+  await ev(() => { window.__game.raid.player.hp = 99; });
 
   // 5. walk the ledge with D: x grows, y stays on the lane; firing is ignored (no bullets, no shots)
   const lx0 = await ev(() => window.__game.raid.player.pos.x);
@@ -573,6 +607,8 @@ try {
   expect(c.mode === "II" && near(c.yaw, 45, 0.01) && near(c.pitch, 30, 0.01), "loot arena should be camera II again: " + JSON.stringify(c));
   expect((await ev(() => window.__game.zone)) === "arena", "loot arena zone should be arena");
   await frames(10);
+  const fullRows = await ev(() => window.__game.view);
+  expect(fullRows.rows && fullRows.rows.max - fullRows.rows.min > 12, "camera II should draw the whole map, not a band: " + JSON.stringify(fullRows.rows));
   await page.screenshot({ path: "screenshots/play-loot-arena.png" });
 
   // 6b. crawlers give up at the ledge mouth: one west of the first ledge, the player on it, watch 400 frames
@@ -660,6 +696,28 @@ try {
   expect(early.zoom < 1.05, "known: pull-back started too early: " + JSON.stringify(early));
   expect(early.rev.join() === "celestial,electrochem,physiology,radiochem", "known: reveals shown on the ledge " + early.rev);
   await page.screenshot({ path: "screenshots/play-ledge.png" });
+  const clear = (l, gap = 28) => l.rects.every((r) => r.x1 + gap <= l.player.x0 || r.x0 - gap >= l.player.x1 || r.y1 + gap <= l.player.y0 || r.y0 - gap >= l.player.y1);
+  const lab0 = await ev(() => JSON.parse(JSON.stringify(window.__game.labels)));
+  expect(lab0.rects.length >= 2, "known: expected reveal labels at normal zoom: " + lab0.rects.length);
+  expect(clear(lab0), "known: a reveal label is within 28px of the player's sprite: " + JSON.stringify(lab0));
+  // sweep both ledges: labels never touch the player, and the painted layers never reach the end of their art
+  const clamps0 = await ev(() => window.__game.vistaClamps);
+  let sweepLabels = 0;
+  for (const [x, y] of [[20.5, 9], [23, 9], [26.5, 9], [29, 9], [33.5, 9], [54.5, 18], [57, 18], [60, 18], [63.5, 18]]) {
+    await ev(([x, y]) => { const r = window.__game.raid; r.player.pos.x = x; r.player.pos.y = y; r.player.vel.x = r.player.vel.y = 0; r.player.hp = 99; window.__game.snapCamera(); }, [x, y]);
+    await frames(4);
+    const l = await ev(() => JSON.parse(JSON.stringify(window.__game.labels)));
+    sweepLabels += l.rects.length;
+    expect(clear(l), `known: label near the player at x=${x}: ` + JSON.stringify(l));
+    const vw = await ev(() => ({ ...window.__game.view }));
+    expect(inMap(vw, false), `camera I view leaves the map at x=${x}: ` + JSON.stringify(vw));
+  }
+  info.sweep = { labels: sweepLabels, edgeClamps: (await ev(() => window.__game.vistaClamps)) - clamps0 };
+  expect(sweepLabels >= 8, "known: labels vanished while walking the ledges: " + sweepLabels);
+  expect(info.sweep.edgeClamps === 0, "a painted vista layer reached the end of its art while walking the ledges: " + info.sweep.edgeClamps);
+  // (snapCamera re-arms the reveals, so forget the sweep's toasts and let the middle of the ledge announce them once more)
+  await ev(() => { window.__toasts = []; const r = window.__game.raid; r.player.pos.x = 26.5; r.player.pos.y = 9; window.__game.snapCamera(); });
+  await frames(4);
   await ev(() => { window.__game.paused = false; });
   expect(await waitLookout(), "known: ledge pull-back never reached 0.9");
   await settle();
@@ -669,6 +727,9 @@ try {
   expect(known.rev.join() === "celestial,electrochem,physiology,radiochem", "known: reveals " + known.rev);
   expect(known.toasts.length === 4 && known.toasts.some((x) => x.includes("지층의 나이가 보인다 (방사화학)")), "known: reveal toasts " + JSON.stringify(known.toasts));
   expect(known.dl > 0.2 && known.dl < 0.6, "known: should be dusk, daylight " + known.dl);
+  const labK = await ev(() => JSON.parse(JSON.stringify(window.__game.labels)));
+  info.vistaLabels = labK.rects.length;
+  expect(labK.rects.length >= 3 && clear(labK), "known (pulled back): labels missing or touching the player: " + JSON.stringify(labK));
   await page.screenshot({ path: "screenshots/play-vista-known.png" });
   // moving cancels the pull-back quickly
   await page.keyboard.down("a");
