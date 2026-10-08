@@ -12,10 +12,25 @@ import { ITEMS, itemValue, type Item } from "../game/items";
 import { RAID, type Crawler, type Raid } from "../game/raid";
 import type { ParsedMap } from "../game/raidMap";
 import { FLOWER, GRASS, ROCK, SHADOW, hash2, mix } from "./palette";
-import { drawVista } from "./vista";
+import type { KnowledgeId } from "../game/knowledge";
+import { loadVistaArt } from "./art";
+import { VISTA_H, Vista, type VistaLabel } from "./vista";
 
 export const TILE = 16;
 export const VIEW_H = 180;
+/** Lookout (전망 지점): the logical height grows from VIEW_H to VIEW_H * LOOK_ZOOM while the player stands still at the cliff. */
+export const LOOK_ZOOM = 300 / 180;
+const LOOK_RANGE = 2.5; // m from a '~' tile
+const LOOK_STILL = 1; // s of stillness before the camera pulls back
+const LOOK_IN = 1.5, LOOK_OUT = 0.3; // s to pull back / to return
+const LOOK_PAN = 150; // px of camera pan toward the void at full lookout
+
+const REVEAL_TOAST: Record<string, string> = {
+  celestial: "관측: 두 달의 궤도와 주기가 보인다 (천문학)",
+  radiochem: "관측: 지층의 나이가 보인다 (방사화학)",
+  physiology: "관측: 먼 무리의 이동 경로가 보인다 (생리학)",
+  electrochem: "관측: 오로라와 자기장 선이 보인다 (전기화학)",
+};
 const BLOCK = 8; // rock height in px (top face is raised by this much)
 
 interface Particle { x: number; y: number; vx: number; vy: number; g: number; life: number; max: number; color: string; size: number }
@@ -28,6 +43,18 @@ export class Renderer {
   H = VIEW_H;
   camX = 0;
   camY = 0;
+  /** lookout progress, eased 0..1 (1 = fully pulled back) */
+  lookout = 0;
+  /** knowledge reveals the player has been shown in this raid */
+  readonly revealed = new Set<KnowledgeId>();
+  onReveal: ((id: KnowledgeId, text: string) => void) | null = null;
+  private lookRaw = 0;
+  private still = 0;
+  private lookDir = { x: 0, y: 0 };
+  private vista = new Vista();
+  private vistaCv = document.createElement("canvas");
+  private labelCv = document.createElement("canvas");
+  private labelsShown = false;
   private t = 0;
   private ground: HTMLCanvasElement | null = null;
   private groundFor: ParsedMap | null = null;
@@ -38,15 +65,35 @@ export class Renderer {
 
   constructor(readonly canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext("2d", { alpha: false })!;
+    this.labelCv.id = "vista-labels";
+    this.labelCv.style.cssText = "position:fixed;inset:0;width:100%;height:100%;pointer-events:none";
+    canvas.after(this.labelCv);
     this.resize();
+    void loadVistaArt().then((a) => { this.vista.art = a; });
+  }
+
+  /** Logical size follows the window aspect and the current lookout height. */
+  private layout(h: number) {
+    const w = Math.max(160, Math.round((h * innerWidth) / Math.max(1, innerHeight)));
+    if (w === this.W && h === this.H && this.canvas.width === w && this.canvas.height === h) return;
+    // keep the view centred while its size changes
+    this.camX -= (w - this.W) / 2; this.camY -= (h - this.H) / 2;
+    this.W = w; this.H = h;
+    this.canvas.width = w;
+    this.canvas.height = h;
+    this.ctx.imageSmoothingEnabled = false;
   }
 
   resize() {
-    this.W = Math.max(160, Math.round((VIEW_H * innerWidth) / Math.max(1, innerHeight)));
-    this.canvas.width = this.W;
-    this.canvas.height = this.H;
-    this.ctx.imageSmoothingEnabled = false;
+    this.layout(this.H);
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.labelCv.width = Math.round(innerWidth * dpr);
+    this.labelCv.height = Math.round(innerHeight * dpr);
+    this.labelsShown = true;
   }
+
+  /** Zoom factor of the current frame: 1 normally, up to LOOK_ZOOM at full lookout. */
+  get zoom() { return this.H / VIEW_H; }
 
   /** World metres -> CSS pixels on the window (for DOM overlays). */
   worldToScreen(wx: number, wy: number) {
@@ -61,7 +108,92 @@ export class Renderer {
       y: mh <= this.H ? (mh - this.H) / 2 : Math.min(mh - this.H, Math.max(-BLOCK, py)),
     };
   }
-  snapCamera(raid: Raid) { const c = this.camTarget(raid); this.camX = c.x; this.camY = c.y; this.particles.length = 0; this.fallers.length = 0; this.flash = 0; }
+  snapCamera(raid: Raid) {
+    this.lookRaw = this.lookout = this.still = 0;
+    this.layout(VIEW_H);
+    this.revealed.clear();
+    const c = this.camTarget(raid); this.camX = c.x; this.camY = c.y; this.particles.length = 0; this.fallers.length = 0; this.flash = 0;
+  }
+
+  /** Nearest '~' tile within LOOK_RANGE metres of the player: unit direction toward it, or null. */
+  private voidNear(raid: Raid) {
+    const m = raid.map, p = raid.player.pos;
+    let best = LOOK_RANGE, dx = 0, dy = 0, found = false;
+    for (let ty = Math.max(0, Math.floor(p.y - LOOK_RANGE)); ty <= Math.min(m.h - 1, Math.floor(p.y + LOOK_RANGE)); ty++) {
+      for (let tx = Math.max(0, Math.floor(p.x - LOOK_RANGE)); tx <= Math.min(m.w - 1, Math.floor(p.x + LOOK_RANGE)); tx++) {
+        if (m.rows[ty][tx] !== "~") continue;
+        const nx = Math.min(tx + 1, Math.max(tx, p.x)), ny = Math.min(ty + 1, Math.max(ty, p.y)); // closest point of the tile
+        const d = Math.hypot(nx - p.x, ny - p.y);
+        if (d < best) { best = d; dx = tx + 0.5 - p.x; dy = ty + 0.5 - p.y; found = true; }
+      }
+    }
+    if (!found) return null;
+    const l = Math.hypot(dx, dy) || 1;
+    return { x: dx / l, y: dy / l };
+  }
+
+  private updateLookout(raid: Raid, dt: number, busy: boolean) {
+    const v = Math.hypot(raid.player.vel.x, raid.player.vel.y);
+    const near = raid.state === "running" ? this.voidNear(raid) : null;
+    this.still = near && !busy && v < 0.3 ? this.still + dt : 0;
+    if (near) this.lookDir = near;
+    const want = !!near && this.still >= LOOK_STILL;
+    this.lookRaw = want ? Math.min(1, this.lookRaw + dt / LOOK_IN) : Math.max(0, this.lookRaw - dt / LOOK_OUT);
+    const k = this.lookRaw;
+    this.lookout = k * k * (3 - 2 * k); // smoothstep
+  }
+
+  /** World pixel is not covered by ground: a cliff tile, or outside the map. */
+  private isVoidAt(raid: Raid, wx: number, wy: number) {
+    const tx = Math.floor(wx / TILE), ty = Math.floor(wy / TILE), m = raid.map;
+    if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h) return tx >= m.w; // east of the map is open sky
+    return m.rows[ty][tx] === "~";
+  }
+
+  /** Is any '~' tile inside the current view? */
+  private voidInView(raid: Raid) {
+    const m = raid.map;
+    const r0 = Math.max(0, Math.floor(this.camY / TILE)), r1 = Math.min(m.h - 1, Math.floor((this.camY + this.H) / TILE));
+    const c0 = Math.max(0, Math.floor(this.camX / TILE)), c1 = Math.min(m.w - 1, Math.floor((this.camX + this.W) / TILE));
+    for (let y = r0; y <= r1; y++) for (let x = c0; x <= c1; x++) if (m.rows[y][x] === "~") return true;
+    return false;
+  }
+
+  private checkReveals(raid: Raid) {
+    if (this.revealed.size >= raid.knowledge.size || !this.voidInView(raid)) return;
+    for (const id of raid.knowledge) {
+      if (this.revealed.has(id) || !REVEAL_TOAST[id]) continue;
+      if (id === "electrochem" && raid.daylight >= 0.6) continue; // the aurora needs dusk
+      this.revealed.add(id);
+      this.onReveal?.(id, REVEAL_TOAST[id]);
+    }
+  }
+
+  /** Vista labels on a native-resolution overlay, so text stays crisp while the pixel art is scaled up. */
+  private drawLabels(labels: VistaLabel[]) {
+    const cv = this.labelCv, g = cv.getContext("2d")!;
+    if (!labels.length && !this.labelsShown) return;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, cv.width, cv.height);
+    this.labelsShown = labels.length > 0;
+    if (!labels.length) return;
+    const dpr = cv.width / Math.max(1, innerWidth);
+    g.scale(dpr, dpr);
+    g.font = '600 10px "Noto Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif';
+    g.textBaseline = "middle";
+    const sx = (this.H / VISTA_H) * (innerWidth / this.W), sy = innerHeight / VISTA_H;
+    const a = 0.5 + 0.4 * this.lookout;
+    for (const L of labels) {
+      const x = L.x * sx, y = L.y * sy;
+      g.textAlign = L.align;
+      g.shadowColor = "rgba(14,26,34,0.85)"; g.shadowBlur = 2; g.shadowOffsetY = 1;
+      g.fillStyle = `rgba(246,250,252,${a.toFixed(3)})`;
+      const tx = L.tick ? x + 9 : x;
+      g.fillText(L.text, tx, y);
+      if (L.tick) { g.shadowColor = "transparent"; g.fillRect(Math.round(x), Math.round(y), 6, 1); }
+    }
+    g.shadowColor = "transparent";
+  }
 
   // ---------------------------------------------------------------- ground layer
   private buildGround(map: ParsedMap) {
@@ -398,15 +530,28 @@ export class Renderer {
   }
 
   // ---------------------------------------------------------------- frame
-  draw(raid: Raid, dt: number) {
-    const g = this.ctx, W = this.W, H = this.H;
+  /** busy: the player is giving move/fire input (or a panel is open), which cancels the lookout. */
+  draw(raid: Raid, dt: number, busy = false, lookoutOn = false) {
     this.t += dt;
+    if (lookoutOn) this.updateLookout(raid, dt, busy); else { this.lookRaw = this.lookout = this.still = 0; }
+    this.layout(Math.round(VIEW_H * (1 + (LOOK_ZOOM - 1) * this.lookout)));
+    const g = this.ctx, W = this.W, H = this.H;
     if (this.groundFor !== raid.map || !this.ground) this.buildGround(raid.map);
     const tgt = this.camTarget(raid), k = 1 - Math.exp(-dt * 8);
+    tgt.x += this.lookDir.x * LOOK_PAN * this.lookout; tgt.y += this.lookDir.y * LOOK_PAN * this.lookout;
     this.camX += (tgt.x - this.camX) * k; this.camY += (tgt.y - this.camY) * k;
     const ox = Math.round(this.camX), oy = Math.round(this.camY);
 
-    drawVista(g, W, H, ox, oy, this.t);
+    // vista: drawn in a fixed 180 px tall space, then scaled to the (zoomed) view without smoothing
+    const Wv = Math.ceil((W * VISTA_H) / H), vc = this.vistaCv;
+    if (vc.width !== Wv || vc.height !== VISTA_H) { vc.width = Wv; vc.height = VISTA_H; }
+    const labels = this.vista.draw(vc.getContext("2d")!, Wv, {
+      cx: Math.round(ox + W / 2 - Wv / 2), cy: Math.round(oy + H / 2 - VISTA_H / 2), t: this.t, daylight: raid.daylight, known: raid.knowledge, look: this.lookout,
+      isVoid: (x, y) => this.isVoidAt(raid, (x * H) / VISTA_H + ox, (y * H) / VISTA_H + oy),
+    });
+    g.drawImage(vc, 0, 0, Wv, VISTA_H, 0, 0, Math.round((Wv * H) / VISTA_H), H);
+    this.checkReveals(raid);
+    this.drawLabels(this.voidInView(raid) ? labels : []);
     g.drawImage(this.ground!, -ox, -oy);
     this.drawExtraction(raid, ox, oy);
     this.consumeEvents(raid);

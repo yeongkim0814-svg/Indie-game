@@ -19,6 +19,8 @@ declare global {
       readonly raid: Raid; input: Input; startRaid(): void; readonly screen: Screen; readonly shots: number;
       readonly stashGrid: Grid; readonly points: number; readonly progress: Progress; refreshResearch(): void; readonly bagOpen: boolean; openBag(open?: boolean): void;
       readonly equipped: Item | null; readonly packGrid: Grid; craft(out: GearKind): string | null; saveAll(): void;
+      /** lookout ease 0..1, render zoom (1..~1.67) and the knowledge reveals shown so far in this raid */
+      readonly lookout: number; readonly zoom: number; readonly revealed: string[];
     };
     __ready?: boolean; __frame?: number; __fps?: number;
   }
@@ -40,6 +42,7 @@ let pack = loadPack(); // items to carry into the next raid
 let lastEmptyToast = -1e9;
 let acc = 0, shots = 0, last = performance.now(), fps = 60;
 renderer.snapCamera(raid);
+renderer.onReveal = (_id, text) => hud.toast(text);
 hud.getResearchData = () => ({ progress, stock: stockOf(stash) });
 hud.canStore = (kind) => !!stash.findSpot(makeItem(kind));
 hud.setStash(stash, progress.points);
@@ -234,7 +237,10 @@ function frame(now: number) {
     }
     if (raid.state !== "running") finishRaid();
   }
-  renderer.draw(raid, dt);
+  const mv = input.state.move;
+  const busy = input.state.fire || Math.hypot(mv.x, mv.y) > 0.05 || bag.open;
+  renderer.draw(raid, dt, busy, screen === "raid" && !portrait);
+  hud.setDim(screen === "raid" ? renderer.lookout : 0);
   if (screen === "raid") { hud.update(raid); bag.update(); input.setDashCooldown(raid.player.dashCooldown / RAID.dash.cooldown); }
   else if (screen === "hideout") hud.updateStash();
 
@@ -259,6 +265,9 @@ window.__game = {
   get packGrid() { return pack; },
   craft(out: GearKind) { const why = craftItem(out); hud.setPoints(progress.points); hud.refreshResearch(); return why; },
   saveAll,
+  get lookout() { return renderer.lookout; },
+  get zoom() { return renderer.zoom; },
+  get revealed() { return [...renderer.revealed]; },
 };
 window.__frame = 0;
 window.__ready = true;

@@ -461,6 +461,67 @@ try {
   await frames(3);
   expect((await ev(() => window.__game.equipped)) === null && (await kindsIn("stashGrid")).includes("launcher"), "unequip should return the launcher to the stash");
 
+  // ---- M5: vista layers, lookout, knowledge reveals --------------------------------------------
+  const setKnowledge = (list) => ev((k) => {
+    const P = JSON.parse(localStorage.getItem("progress") ?? "{}");
+    P.knowledge = k;
+    localStorage.setItem("progress", JSON.stringify(P));
+  }, list);
+  const raidAtCliff = async (time) => {
+    await page.reload();
+    await page.evaluate(() => { window.__toasts = []; new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.textContent) window.__toasts.push(n.textContent); }).observe(document.body, { childList: true, subtree: true }); });
+    await page.waitForFunction(() => window.__ready === true, null, { timeout: 15000 });
+    await frames(3);
+    await page.click("#btn-start");
+    await page.waitForFunction(() => window.__game.screen === "raid", null, { timeout: 5000 });
+    await frames(5);
+    await ev((tm) => {
+      const r = window.__game.raid;
+      if (tm !== null) r.time = tm;
+      for (const c of r.crawlers) c.alive = false; // keep the lookout undisturbed
+      r.player.pos.x = 38.5; r.player.pos.y = 4.5; r.player.vel.x = 0; r.player.vel.y = 0; r.player.hp = 6; // 1.5 m from the east cliff
+    }, time);
+  };
+  const waitLookout = async () => {
+    for (let i = 0; i < 400; i++) {
+      await frames(2);
+      if ((await ev(() => window.__game.lookout)) >= 0.9) return true;
+    }
+    return false;
+  };
+  const settle = () => ev(() => { const r = window.__game.raid; r.player.hp = 6; for (const c of r.crawlers) c.alive = false; });
+
+  await setKnowledge([]);
+  await raidAtCliff(null);
+  expect(await waitLookout(), "plain: lookout never reached 0.9");
+  await frames(6);
+  const plain = await ev(() => ({ look: window.__game.lookout, zoom: window.__game.zoom, rev: window.__game.revealed, hud: getComputedStyle(document.getElementById("weapon-hud")).opacity, hp: getComputedStyle(document.querySelector(".hp")).opacity }));
+  info.vistaPlain = plain;
+  expect(plain.zoom > 1.5, "plain: zoom too small " + plain.zoom);
+  expect(plain.rev.length === 0, "plain: no reveals expected without knowledge: " + plain.rev);
+  expect(+plain.hud < 0.35 && +plain.hp === 1, "HUD should fade (except HP): " + JSON.stringify(plain));
+  await page.screenshot({ path: "screenshots/play-vista-plain.png" });
+
+  await setKnowledge(["mechanics", "radiochem", "physiology", "celestial", "electrochem"]);
+  await raidAtCliff(211.2);
+  expect(await waitLookout(), "known: lookout never reached 0.9");
+  await settle();
+  await frames(10);
+  const known = await ev(() => ({ look: window.__game.lookout, zoom: window.__game.zoom, rev: [...window.__game.revealed].sort(), dl: window.__game.raid.daylight, toasts: window.__toasts.filter((x) => x.startsWith("관측")) }));
+  info.vistaKnown = known;
+  expect(known.rev.join() === "celestial,electrochem,physiology,radiochem", "known: reveals " + known.rev);
+  expect(known.toasts.length === 4 && known.toasts.some((x) => x.includes("지층의 나이가 보인다 (방사화학)")), "known: reveal toasts " + JSON.stringify(known.toasts));
+  expect(known.dl > 0.2 && known.dl < 0.6, "known: should be dusk, daylight " + known.dl);
+  await page.screenshot({ path: "screenshots/play-vista-known.png" });
+  // moving cancels the zoom quickly
+  await page.keyboard.down("a");
+  await frames(14);
+  const moving = await ev(() => ({ look: window.__game.lookout, zoom: window.__game.zoom }));
+  await page.keyboard.up("a");
+  info.vistaMoving = moving;
+  expect(moving.look < 0.1 && moving.zoom < 1.1, "moving did not cancel the lookout: " + JSON.stringify(moving));
+  expect(await ev(() => window.__game.raid.state) === "running", "raid must keep running during lookout");
+
   info.fps = await ev(() => window.__fps);
 } catch (e) {
   errors.push("exception: " + (e?.stack || e));

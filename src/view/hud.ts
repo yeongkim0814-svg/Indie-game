@@ -181,6 +181,13 @@ export class Hud {
     this.setPortrait(false);
   }
 
+  /** Lookout: every raid HUD element except the HP pips fades toward 20 % as k goes 0 -> 1. */
+  setDim(k: number) {
+    const v = (1 - 0.8 * k).toFixed(3);
+    if (this.dim !== v) { this.dim = v; this.hud.style.setProperty("--dim", v); }
+  }
+  private dim = "1";
+
   setPortrait(p: boolean) { this.rotate.style.display = p ? "flex" : "none"; }
 
   show(screen: "hideout" | "raid" | "results") {
