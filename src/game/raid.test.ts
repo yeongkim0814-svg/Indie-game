@@ -155,3 +155,44 @@ describe("raid outcome", () => {
     expect(r.state).toBe("dead");
   });
 });
+
+describe("M3 knowledge in the raid", () => {
+  const OPEN = ["####################", "#P.................#", "####################"];
+  const dash: RaidInput = { move: { x: 1, y: 0 }, fire: false, dash: true };
+
+  it("the recoil dash needs the mechanics knowledge", () => {
+    const r = new Raid(OPEN);
+    r.step(DT, dash);
+    expect(r.player.airborne).toBe(0);
+  });
+
+  it("dash Δv = J/M, so a loaded pack dashes less far", () => {
+    const light = new Raid(OPEN, 1, ["mechanics"]), heavy = new Raid(OPEN, 1, ["mechanics"]);
+    for (let i = 0; i < 4; i++) heavy.backpack.autoPlace(makeItem("ore"));
+    light.step(DT, dash);
+    heavy.step(DT, dash);
+    expect(light.player.vel.x).toBeCloseTo(RAID.dash.impulse / RAID.player.bodyMass, 6);
+    expect(heavy.player.vel.x).toBeCloseTo(RAID.dash.impulse / (RAID.player.bodyMass + 12), 6);
+    const x0 = light.player.pos.x;
+    run(light, 0.6, idleRaidInput());
+    run(heavy, 0.6, idleRaidInput());
+    expect(light.player.pos.x - x0).toBeGreaterThan(2);
+    expect(heavy.player.pos.x).toBeLessThan(light.player.pos.x);
+  });
+
+  it("the dash has a cooldown", () => {
+    const r = new Raid(OPEN, 1, ["mechanics"]);
+    r.step(DT, dash);
+    const v = r.player.vel.x;
+    r.step(DT, dash);
+    expect(r.player.vel.x).toBeCloseTo(v, 6);
+  });
+
+  it("crawlers slow down as the air cools (Q10)", () => {
+    const r = new Raid(OPEN);
+    expect(r.crawlerActivity).toBeCloseTo(1, 6); // noon, 30 °C
+    r.time = RAID.duration; // sunset, 10 °C: two Q10 steps down
+    expect(r.crawlerActivity).toBeCloseTo(1 / (RAID.metabolism.q10 * RAID.metabolism.q10), 6);
+  });
+});
+

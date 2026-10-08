@@ -5,6 +5,7 @@
 import { FIRST_MAP, parseMap, type ParsedMap } from "./raidMap";
 import { Grid } from "./inventory";
 import { ageItem, itemValue, makeItem, temperature, type Item } from "./items";
+import type { KnowledgeId } from "./knowledge";
 
 export const RAID = {
   duration: 240, // s until sunset; staying out after that = lost
@@ -19,19 +20,23 @@ export const RAID = {
     fireInterval: 1 / 6,
     autoAimRange: 9,
   },
+  /** recoil dash (needs "mechanics"): a heavy slug fired backwards; feet leave the ground so drag is off while airborne */
+  dash: { impulse: 600, airTime: 0.3, cooldown: 1.5 },
   bullet: { mass: 0.5, speed: 20, life: 0.9, radius: 0.12, damage: 1 }, // mass exaggerated so momentum is felt
   sample: { radius: 0.6 },
   backpack: { w: 5, h: 3 },
   notebook: { w: 2, h: 2 }, // secure container: survives death and sunset
   crawler: { mass: 20, radius: 0.35, hp: 4, drive: 300, drag: 100, aggro: 10, touchDamage: 1, touchCooldown: 0.8 },
+  /** ectotherm metabolism: drive scales by Q10^((T − T_ref)/10); balanced at noon heat */
+  metabolism: { q10: 1.4, refTemp: 30 },
 };
 
 export interface Vec2 { x: number; y: number }
-export interface RaidInput { move: Vec2; fire: boolean }
+export interface RaidInput { move: Vec2; fire: boolean; dash?: boolean }
 export type RaidState = "running" | "extracted" | "dead" | "lost";
-export type RaidEvent = { kind: "shot" | "hit" | "kill" | "pickup" | "full" | "drop" | "hurt" | "wall"; x: number; y: number };
+export type RaidEvent = { kind: "shot" | "hit" | "kill" | "pickup" | "full" | "drop" | "hurt" | "wall" | "dash"; x: number; y: number };
 
-export interface Player { pos: Vec2; vel: Vec2; facing: Vec2; hp: number; cooldown: number }
+export interface Player { pos: Vec2; vel: Vec2; facing: Vec2; hp: number; cooldown: number; dashCooldown: number; airborne: number }
 export interface Crawler { pos: Vec2; vel: Vec2; hp: number; alive: boolean; touchCooldown: number }
 export interface Bullet { pos: Vec2; vel: Vec2; life: number }
 /** An item lying on the ground. `blocked` stops a full pack from re-trying it every frame until the player steps away. */
@@ -65,12 +70,14 @@ export class Raid {
   events: RaidEvent[] = [];
   private rand: () => number;
   private nightSpawnClock = 0;
+  readonly knowledge: ReadonlySet<KnowledgeId>;
 
-  constructor(mapRows: string[] = FIRST_MAP, seed = 1) {
+  constructor(mapRows: string[] = FIRST_MAP, seed = 1, knowledge: Iterable<KnowledgeId> = []) {
+    this.knowledge = new Set(knowledge);
     this.map = parseMap(mapRows);
     this.rand = mulberry32(seed);
     const s = this.map.start;
-    this.player = { pos: { ...s }, vel: { x: 0, y: 0 }, facing: { x: 1, y: 0 }, hp: RAID.player.hp, cooldown: 0 };
+    this.player = { pos: { ...s }, vel: { x: 0, y: 0 }, facing: { x: 1, y: 0 }, hp: RAID.player.hp, cooldown: 0, dashCooldown: 0, airborne: 0 };
     this.crawlers = this.map.crawlers.map((c) => this.newCrawler(c));
     this.samples = this.map.samples.map((p) => ({ pos: { x: p.x, y: p.y }, item: makeItem(p.kind), taken: false, blocked: false }));
   }
@@ -80,6 +87,9 @@ export class Raid {
   get carriedItems(): Item[] { return [...this.backpack.items, ...this.notebook.items]; }
   get carriedValue() { return this.carriedItems.reduce((v, it) => v + itemValue(it), 0); }
   get temperature() { return temperature(this.daylight); }
+  /** Crawler activity relative to noon: Q10^((T − T_ref)/10). */
+  get crawlerActivity() { const m = RAID.metabolism; return Math.pow(m.q10, (this.temperature - m.refTemp) / 10); }
+  get canDash() { return this.knowledge.has("mechanics"); }
   get timeLeft() { return Math.max(0, RAID.duration - this.time); }
   /** 1 = full day, 0 = sunset. Eases out over the last 30 % of the day. */
   get daylight() { return Math.min(1, Math.max(0, (RAID.duration - this.time) / (RAID.duration * (1 - RAID.nightFrom)))); }
@@ -151,7 +161,20 @@ export class Raid {
     const ml = Math.hypot(mx, my);
     if (ml > 1) { mx /= ml; my /= ml; }
     if (ml > 0.1) p.facing = { x: mx / Math.max(ml, 1e-6), y: my / Math.max(ml, 1e-6) };
-    this.drive(p.vel, { x: mx, y: my }, P.drive, P.drag, this.playerMass, dt);
+    // recoil dash: Δv = J/M along the stick (or facing); airborne for a moment, so no foot drag
+    p.dashCooldown = Math.max(0, p.dashCooldown - dt);
+    if (input.dash && this.canDash && p.dashCooldown <= 0) {
+      const D = RAID.dash;
+      const dl = Math.hypot(mx, my);
+      const dir = dl > 0.1 ? { x: mx / dl, y: my / dl } : p.facing;
+      const dv = D.impulse / this.playerMass;
+      p.vel.x += dir.x * dv; p.vel.y += dir.y * dv;
+      p.dashCooldown = D.cooldown;
+      p.airborne = D.airTime;
+      this.events.push({ kind: "dash", x: p.pos.x, y: p.pos.y });
+    }
+    if (p.airborne > 0) p.airborne = Math.max(0, p.airborne - dt);
+    else this.drive(p.vel, { x: mx, y: my }, P.drive, P.drag, this.playerMass, dt);
     this.moveBody(p.pos, p.vel, P.radius, dt);
 
     // firing: auto-aim like Soul Knight; recoil Δv = −J/M on the shooter
@@ -191,7 +214,7 @@ export class Raid {
       if (!c.alive) continue;
       const dx = p.pos.x - c.pos.x, dy = p.pos.y - c.pos.y, d = Math.hypot(dx, dy);
       const chase = d < C.aggro || this.time > RAID.duration * RAID.nightFrom;
-      this.drive(c.vel, chase && d > 0 ? { x: dx / d, y: dy / d } : { x: 0, y: 0 }, C.drive, C.drag, C.mass, dt);
+      this.drive(c.vel, chase && d > 0 ? { x: dx / d, y: dy / d } : { x: 0, y: 0 }, C.drive * this.crawlerActivity, C.drag, C.mass, dt);
       this.moveBody(c.pos, c.vel, C.radius, dt);
       c.touchCooldown = Math.max(0, c.touchCooldown - dt);
       if (d < C.radius + P.radius + 0.05 && c.touchCooldown <= 0) {
