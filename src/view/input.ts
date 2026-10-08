@@ -17,11 +17,13 @@ export class Input {
   private readonly base = div("joy-base");
   private readonly knob = div("joy-knob");
   private readonly fireBtn = div("btn-fire", "발사");
+  private readonly dashBtn = div("btn-dash", "대시");
+  private dashShown = false;
 
   constructor(root: HTMLElement) {
     this.base.style.display = this.knob.style.display = "none";
     this.layer.append(this.base, this.knob);
-    root.append(this.layer, this.fireBtn);
+    root.append(this.layer, this.fireBtn, this.dashBtn);
     this.setEnabled(false);
 
     const L = this.layer;
@@ -55,10 +57,18 @@ export class Input {
     F.addEventListener("pointercancel", endFire);
     F.addEventListener("lostpointercapture", endFire);
 
+    this.dashBtn.addEventListener("pointerdown", (e) => {
+      if (!this.enabled || !this.dashShown) return;
+      e.preventDefault();
+      this.state.dash = true;
+    });
+    this.dashBtn.addEventListener("contextmenu", (e) => e.preventDefault());
+
     addEventListener("keydown", (e) => {
       if (!this.enabled) return;
       const k = key(e);
       if (!k) return;
+      if (k === "dash") { e.preventDefault(); if (this.dashShown && !e.repeat) this.state.dash = true; return; }
       if (this.fireLocked && k === "fire") return;
       e.preventDefault();
       this.keys.add(k); this.refresh();
@@ -72,9 +82,27 @@ export class Input {
     this.enabled = on;
     this.layer.style.display = on ? "block" : "none";
     this.fireBtn.style.display = on && !this.fireLocked ? "block" : "none";
+    this.dashBtn.style.display = on && this.dashShown ? "block" : "none";
+    if (!on) { this.state.dash = false; }
     if (!on) { this.releaseJoy(); this.fireId = null; this.fireBtn.classList.remove("down"); this.keys.clear(); }
     this.refresh();
   }
+
+  /** Show the dash button (only once "mechanics" is known). */
+  setDashAvailable(on: boolean) {
+    this.dashShown = on;
+    this.dashBtn.style.display = this.enabled && on ? "block" : "none";
+  }
+
+  /** Cooldown ring: 0 = ready, 1 = just used. */
+  setDashCooldown(frac: number) {
+    const f = Math.max(0, Math.min(1, frac));
+    this.dashBtn.style.setProperty("--cd", `${(f * 360).toFixed(0)}deg`);
+    this.dashBtn.classList.toggle("ready", f <= 0);
+  }
+
+  /** Dash is an edge: Raid.step sees it for one step, then it is cleared. */
+  consumeDash() { this.state.dash = false; }
 
   /** Disable (and hide) the fire button, e.g. while the bag is open; the joystick keeps working. */
   setFireLocked(lock: boolean) {
@@ -119,6 +147,7 @@ function key(e: KeyboardEvent): string | null {
     case "a": case "arrowleft": return "left";
     case "d": case "arrowright": return "right";
     case " ": case "j": return "fire";
+    case "shift": case "k": return "dash";
   }
   return null;
 }

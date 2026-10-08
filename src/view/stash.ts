@@ -1,6 +1,7 @@
 /** Hideout storage: a 10×6 grid plus research points, persisted in localStorage. Items here do not age. */
 import { Grid, type Placed } from "../game/inventory";
-import { ITEMS, reserveUids, type Item } from "../game/items";
+import { ITEMS, reserveUids, type Item, type ItemKind } from "../game/items";
+import { FACILITIES, KNOWLEDGE, newProgress, type FacilityId, type KnowledgeId, type Progress } from "../game/knowledge";
 
 export const STASH_SIZE = { w: 10, h: 6 };
 const GRID_KEY = "stash.grid";
@@ -35,6 +36,45 @@ export function readPoints(): number {
 
 export function savePoints(n: number) {
   try { localStorage.setItem(POINTS_KEY, String(Math.max(0, Math.round(n)))); } catch { /* storage unavailable */ }
+}
+
+const PROGRESS_KEY = "progress";
+
+/** Load saved Progress; validates every field. Migrates the old "research.points" value when no progress exists. */
+export function loadProgress(): Progress {
+  const p = newProgress();
+  try {
+    const raw = localStorage.getItem(PROGRESS_KEY);
+    if (raw) {
+      const d = JSON.parse(raw);
+      if (d && typeof d === "object") {
+        if (Number.isFinite(d.points) && d.points > 0) p.points = Math.round(d.points);
+        if (Array.isArray(d.facilities)) p.facilities = [...new Set(d.facilities)].filter((f): f is FacilityId => typeof f === "string" && f in FACILITIES);
+        if (Array.isArray(d.knowledge)) p.knowledge = [...new Set(d.knowledge)].filter((k): k is KnowledgeId => typeof k === "string" && k in KNOWLEDGE);
+        return p;
+      }
+    }
+    p.points = readPoints();
+    saveProgress(p);
+  } catch { /* corrupt or unavailable: defaults */ }
+  return p;
+}
+
+export function saveProgress(p: Progress) {
+  try { localStorage.setItem(PROGRESS_KEY, JSON.stringify(p)); } catch { /* storage unavailable */ }
+}
+
+/** Count stash items by kind. */
+export function stockOf(g: Grid): Partial<Record<ItemKind, number>> {
+  const s: Partial<Record<ItemKind, number>> = {};
+  for (const it of g.items) s[it.kind] = (s[it.kind] ?? 0) + 1;
+  return s;
+}
+
+/** Remove `n` items of `kind` from the stash, lowest value first. */
+export function takeMaterials(g: Grid, kind: ItemKind, n: number, value: (it: Item) => number) {
+  const picks = g.items.filter((i) => i.kind === kind).sort((a, b) => value(a) - value(b)).slice(0, n);
+  for (const it of picks) g.remove(it);
 }
 
 /** Auto-place raid loot into the stash. Returns the items that did not fit. */

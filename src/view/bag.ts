@@ -2,6 +2,7 @@ import { Grid } from "../game/inventory";
 import { RAID, type Raid } from "../game/raid";
 import { GridView, ItemController } from "./gridui";
 import type { Input } from "./input";
+import { carriedValueText, valueKnown } from "./know";
 
 const CELL = 44;
 
@@ -62,6 +63,7 @@ export class BagPanel {
   /** Attach to a (new) raid; the panel closes. */
   setRaid(raid: Raid) {
     this.raid = raid;
+    this.ctl.reveal = (it) => valueKnown(raid.knowledge, it);
     this.pack.setGrid(raid.backpack); this.note.setGrid(raid.notebook);
     this.ctl.clear();
     this.setOpen(false);
@@ -90,7 +92,7 @@ export class BagPanel {
     this.ctl.validate();
     this.pack.sync(); this.note.sync();
     const r = this.raid;
-    const s = `${(r.backpack.mass + r.notebook.mass).toFixed(1)}kg · 가치 ${Math.round(r.carriedValue)}`;
+    const s = `${(r.backpack.mass + r.notebook.mass).toFixed(1)}kg · 가치 ${carriedValueText(r.knowledge, r.carriedItems)}`;
     if (s !== this.lastStats) { this.lastStats = s; this.stats.textContent = `무게 ${s}`; }
   }
 }

@@ -9,7 +9,7 @@
  *   5. particles, daylight tint, damage flash
  */
 import { ITEMS, itemValue, type Item } from "../game/items";
-import type { Crawler, Raid } from "../game/raid";
+import { RAID, type Crawler, type Raid } from "../game/raid";
 import type { ParsedMap } from "../game/raidMap";
 import { FLOWER, GRASS, ROCK, SHADOW, hash2, mix } from "./palette";
 import { drawVista } from "./vista";
@@ -258,6 +258,23 @@ export class Renderer {
     }
   }
 
+  /** physiology: faint dotted ring of the aggro radius around nearby crawlers. */
+  private drawAggro(raid: Raid, ox: number, oy: number) {
+    const g = this.ctx, p = raid.player.pos, R = RAID.crawler.aggro * TILE;
+    g.fillStyle = "rgba(255,225,150,0.6)";
+    for (const c of raid.crawlers) {
+      if (!c.alive || Math.hypot(c.pos.x - p.x, c.pos.y - p.y) > 12) continue;
+      const cx = c.pos.x * TILE - ox, cy = c.pos.y * TILE - oy + 3;
+      if (cx + R < 0 || cx - R > this.W || cy + R < 0 || cy - R > this.H) continue;
+      const n = 360, rot = this.t * 0.15;
+      for (let i = 0; i < n; i++) {
+        if (i % 8 > 2) continue;
+        const a = (i / n) * Math.PI * 2 + rot, x = Math.round(cx + Math.cos(a) * R), y = Math.round(cy + Math.sin(a) * R);
+        if (x >= 0 && x < this.W && y >= 0 && y < this.H) g.fillRect(x, y, 2, 2);
+      }
+    }
+  }
+
   // ---------------------------------------------------------------- effects
   private spawn(x: number, y: number, n: number, colors: string[], speed: number, life: number, opt: { g?: number; size?: number; up?: number } = {}) {
     for (let i = 0; i < n; i++) {
@@ -288,6 +305,15 @@ export class Renderer {
         case "kill": this.spawn(x, y - 4, 16, ["#8a4a3a", "#5a2d2a", "#ffb36b", "#fff4c0"], 70, 0.5, { g: 140, size: 2 }); break;
         case "pickup": this.spawn(x, y - 4, 10, ["#6fe0d0", "#c9fff4"], 30, 0.6, { g: -40, up: 10 }); break;
         case "hurt": this.flash = 0.3; break;
+        case "dash": {
+          // puff + streak trailing behind the direction of travel
+          const v = raid.player.vel, l = Math.hypot(v.x, v.y) || 1, bx = -v.x / l, by = -v.y / l;
+          for (let i = 0; i < 7; i++) {
+            const d = 4 + i * 3;
+            this.particles.push({ x: x + bx * d, y: y - 3 + by * d, vx: bx * 12, vy: by * 12 - 4, g: 0, life: 0.28 + i * 0.03, max: 0.5, color: i < 3 ? "#ffffff" : "#c9e6f0", size: i < 4 ? 2 : 1 });
+          }
+          break;
+        }
         case "wall": this.spawn(x, y, 4, [ROCK[4], ROCK[3]], 22, 0.3, { size: 2 }); break;
       }
     }
@@ -363,6 +389,7 @@ export class Renderer {
     }
     while (idx < items.length) items[idx++].draw();
 
+    if (raid.knowledge.has("physiology")) this.drawAggro(raid, ox, oy);
     this.tickParticles(dt, ox, oy);
     this.tint(raid.daylight);
     if (this.flash > 0) {

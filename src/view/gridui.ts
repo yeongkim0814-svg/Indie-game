@@ -73,9 +73,10 @@ export class GridView {
         const s = b.el.style;
         s.left = `${p.x * c + 1}px`; s.top = `${p.y * c + 1}px`; s.width = `${f.w * c - 2}px`; s.height = `${f.h * c - 2}px`;
       }
-      const v = Math.round(itemValue(p.item)), vt = String(v);
+      const known = this.ctl.reveal(p.item);
+      const v = Math.round(itemValue(p.item)), vt = known ? String(v) : "?";
       if (vt !== b.vtxt) { b.vtxt = vt; b.val.textContent = vt; }
-      const bt = `${Math.round((itemValue(p.item) / ITEMS[p.item.kind].value) * 100)}%`;
+      const bt = known ? `${Math.round((itemValue(p.item) / ITEMS[p.item.kind].value) * 100)}%` : "0%";
       if (bt !== b.btxt) { b.btxt = bt; b.bar.style.width = bt; }
       b.el.classList.toggle("sel", p.item === sel);
       b.el.classList.toggle("dragging", p.item === dragging);
@@ -93,6 +94,8 @@ export class ItemController {
   trash: HTMLElement | null = null;
   onChange: () => void = () => {};
   onSelect: () => void = () => {};
+  /** Is this item's current value known to the player? (radiochem / physiology) */
+  reveal: (item: Item) => boolean = () => true;
   /** Return true if the item was thrown away. */
   onTrash: ((item: Item) => boolean) | null = null;
   private rot = false;
@@ -150,7 +153,7 @@ export class ItemController {
       this.ghost = document.createElement("div");
       this.ghost.className = "blk ghost";
       this.ghost.dataset.kind = p.item.kind;
-      this.ghost.innerHTML = `<span class="n">${SHORT[p.item.kind]}</span><span class="v">${Math.round(itemValue(p.item))}</span>`;
+      this.ghost.innerHTML = `<span class="n">${SHORT[p.item.kind]}</span><span class="v">${this.reveal(p.item) ? Math.round(itemValue(p.item)) : "?"}</span>`;
       document.body.append(this.ghost);
     }
     if (p.dragging) this.updateDrag();

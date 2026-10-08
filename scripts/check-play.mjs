@@ -28,7 +28,7 @@ try {
 
   await frames(5);
   expect((await ev(() => window.__game.screen)) === "hideout", "should start on hideout");
-  await page.evaluate(() => { localStorage.removeItem("stash.grid"); localStorage.removeItem("research.points"); });
+  await page.evaluate(() => { localStorage.removeItem("stash.grid"); localStorage.removeItem("research.points"); localStorage.removeItem("progress"); });
   await page.reload();
   await page.waitForFunction(() => window.__ready === true, null, { timeout: 15000 });
   await frames(3);
@@ -40,6 +40,11 @@ try {
   expect((await ev(() => window.__game.raid.state)) === "running", "raid should be running");
   await frames(10);
   await page.screenshot({ path: "screenshots/play-raid.png" });
+  const vis = (sel) => ev((q) => { const e = document.querySelector(q); return !!e && getComputedStyle(e).display !== "none" && e.getBoundingClientRect().width > 0; }, sel);
+  expect(await vis("#sun-dial"), "sun dial should be shown without celestial");
+  expect(!(await vis("#raid-timer")), "mm:ss timer should be hidden without celestial");
+  expect(!(await vis("#btn-dash")), "#btn-dash should be hidden without mechanics");
+  expect(!(await ev(() => window.__game.raid.canDash)), "canDash without mechanics");
 
   // Keyboard: hold D
   const x0 = await ev(() => window.__game.raid.player.pos.x);
@@ -164,7 +169,7 @@ try {
   info.analyze = { pts0, pts1, expectPts };
   expect(pts1 === pts0 + expectPts && pts1 > pts0, "research points did not increase by the ore value");
   expect((await ev(() => window.__game.stashGrid.items.length)) === 0, "analyzed ore still in stash");
-  expect((await ev(() => localStorage.getItem("research.points"))) === String(pts1), "points not persisted");
+  expect((await ev(() => JSON.parse(localStorage.getItem("progress")).points)) === pts1, "points not persisted in progress");
 
   // second raid: normal extraction carries backpack + notebook home
   await page.click("#btn-start");
@@ -206,6 +211,80 @@ try {
   await page.waitForFunction(() => window.__game.screen === "hideout", null, { timeout: 5000 });
   await frames(3);
   await page.screenshot({ path: "screenshots/play-stash2.png" });
+
+  // ---- M3: facilities + knowledge tree --------------------------------------
+  await ev(() => {
+    const g = window.__game, G = g.stashGrid;
+    // clear the stash, then hand over exactly 3 quartz + 1 ore + 1 bio
+    for (const it of [...G.items]) G.remove(it);
+    const mk = (kind, uid) => ({ uid, kind, age: 0, fresh: 1 });
+    for (const [k, u] of [["quartz", 9001], ["quartz", 9002], ["quartz", 9003], ["ore", 9004], ["bio", 9005]]) if (!G.autoPlace(mk(k, u))) throw new Error("stash full");
+    g.progress.points = 300;
+    localStorage.setItem("stash.grid", JSON.stringify(G));
+    g.refreshResearch();
+  });
+  await page.click("#tab-research");
+  await frames(3);
+  expect((await page.locator("#btn-build-workbench").count()) === 0, "workbench should not have a build button");
+  expect(await ev(() => document.getElementById("btn-research-celestial").disabled), "celestial should be locked before the observatory");
+  info.lockedReason = await ev(() => document.getElementById("btn-research-celestial").textContent);
+  await page.screenshot({ path: "screenshots/play-research-before.png" });
+  for (const id of ["btn-build-lab", "btn-build-observatory", "btn-research-mechanics", "btn-research-radiochem", "btn-research-physiology", "btn-research-celestial"]) {
+    await page.locator("#" + id).scrollIntoViewIfNeeded();
+    await page.click("#" + id);
+    await frames(2);
+  }
+  const m3 = await ev(() => ({ k: [...window.__game.progress.knowledge], f: [...window.__game.progress.facilities], pts: window.__game.points, stash: window.__game.stashGrid.items.map((i) => i.kind), saved: JSON.parse(localStorage.getItem("progress")) }));
+  info.m3 = m3;
+  expect(["mechanics", "radiochem", "physiology", "celestial"].every((k) => m3.k.includes(k)), "not all four knowledge nodes learned: " + m3.k);
+  expect(m3.f.includes("lab") && m3.f.includes("observatory"), "facilities not built");
+  expect(m3.pts === 300 - 40 - 60 - 30 - 40 - 40 - 50, "points mismatch: " + m3.pts);
+  expect(m3.stash.length === 0, "build materials did not leave the stash: " + m3.stash);
+  expect(m3.saved.knowledge.length === 4 && m3.saved.points === m3.pts, "progress not persisted");
+  await ev(() => document.getElementById("research-pane").scrollTo(0, 0));
+  await frames(2);
+  await page.screenshot({ path: "screenshots/play-research.png" });
+  expect(await vis("#btn-start"), "#btn-start not reachable from the research view");
+
+  // raid with knowledge
+  await page.click("#btn-start");
+  await page.waitForFunction(() => window.__game.screen === "raid", null, { timeout: 5000 });
+  await frames(10);
+  expect(await ev(() => window.__game.raid.canDash), "raid.canDash should be true");
+  expect(await vis("#raid-timer"), "mm:ss timer should be shown with celestial");
+  expect(!(await vis("#sun-dial")), "sun dial should be hidden with celestial");
+  expect(await vis("#btn-dash"), "#btn-dash should be shown with mechanics");
+  expect(await vis("#crawler-activity"), "crawler activity line missing");
+  const timerText = await ev(() => document.getElementById("raid-timer").textContent);
+  expect(/^\d\d:\d\d$/.test(timerText), "timer text: " + timerText);
+  info.activity = await ev(() => document.getElementById("crawler-activity").textContent);
+  // put a crawler near the player for the aggro ring + an ore off to the side for the arrow
+  await ev(() => {
+    const r = window.__game.raid, c = r.crawlers.find((q) => q.alive);
+    if (c) { c.pos.x = r.player.pos.x + 5; c.pos.y = r.player.pos.y; }
+  });
+  const dashBox = await page.locator("#btn-dash").boundingBox();
+  const fireBox = await page.locator("#btn-fire").boundingBox();
+  expect(dashBox.y + dashBox.height <= fireBox.y, "dash button should sit above the fire button");
+  const before = await ev(() => ({ x: window.__game.raid.player.pos.x, y: window.__game.raid.player.pos.y }));
+  await page.click("#btn-dash");
+  let maxAir = 0, maxV = 0;
+  for (let i = 0; i < 12; i++) {
+    await frames(1);
+    const s = await ev(() => ({ a: window.__game.raid.player.airborne, v: Math.hypot(window.__game.raid.player.vel.x, window.__game.raid.player.vel.y), cd: window.__game.raid.player.dashCooldown }));
+    maxAir = Math.max(maxAir, s.a); maxV = Math.max(maxV, s.v);
+  }
+  info.dash = { maxAir, maxV: +maxV.toFixed(2) };
+  expect(maxAir > 0 && maxV > 4, "#btn-dash did not trigger a dash: " + JSON.stringify(info.dash));
+  expect((await ev(() => window.__game.raid.player.dashCooldown)) > 0 || maxAir > 0, "dash cooldown not started");
+  // keyboard dash too
+  await frames(120);
+  await page.keyboard.press("k");
+  await frames(2);
+  expect((await ev(() => window.__game.raid.player.airborne)) > 0, "K did not dash");
+  await frames(20);
+  await page.screenshot({ path: "screenshots/play-raid-m3.png" });
+
   info.fps = await ev(() => window.__fps);
 } catch (e) {
   errors.push("exception: " + (e?.stack || e));
