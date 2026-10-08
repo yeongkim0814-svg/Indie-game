@@ -295,6 +295,172 @@ try {
   await frames(20);
   await page.screenshot({ path: "screenshots/play-raid-m3.png" });
 
+
+  // ---- M4: crafting, mods, loadout --------------------------------------------------------------
+  const toExtraction = async () => {
+    await ev(() => { const g = window.__game.raid; g.player.pos.x = g.map.extraction.x; g.player.pos.y = g.map.extraction.y; g.player.vel.x = 0; g.player.vel.y = 0; g.player.hp = 6; });
+    await frames(12);
+    await page.waitForFunction(() => window.__game.screen === "results", null, { timeout: 90000 });
+  };
+  await toExtraction();
+  await page.click("#btn-hideout");
+  await page.waitForFunction(() => window.__game.screen === "hideout", null, { timeout: 5000 });
+  await frames(3);
+  // hand over resources through the page: points, knowledge, observatory, and materials in the stash
+  await ev(() => {
+    const g = window.__game, G = g.stashGrid, P = g.progress;
+    for (const it of [...G.items]) G.remove(it);
+    const mk = (kind, uid) => ({ uid, kind, age: 0, fresh: 1 });
+    for (const [k, u] of [["ore", 9101], ["ore", 9102], ["ore", 9103], ["bio", 9104], ["bio", 9105], ["quartz", 9106], ["quartz", 9107], ["quartz", 9108], ["quartz", 9109]]) if (!G.autoPlace(mk(k, u))) throw new Error("stash full");
+    P.points = 500;
+    for (const k of ["mechanics", "celestial"]) if (!P.knowledge.includes(k)) P.knowledge.push(k);
+    if (!P.facilities.includes("observatory")) P.facilities.push("observatory");
+    g.saveAll();
+    g.refreshResearch();
+  });
+  await page.click("#tab-craft");
+  await frames(3);
+  expect(await ev(() => document.getElementById("btn-craft-coilgun").disabled), "coilgun should be locked without electrochem");
+  info.coilgunReason = await ev(() => document.getElementById("btn-craft-coilgun").textContent);
+  expect(info.coilgunReason.includes("지식"), "coilgun lock reason: " + info.coilgunReason);
+  const cardText = await ev(() => document.querySelector('[data-recipe="launcher"]').innerText);
+  expect(cardText.includes("J = 120") && cardText.includes("반동"), "launcher card should show law and weakness: " + cardText);
+  await ev(() => document.getElementById("craft-pane").scrollTo(0, 0));
+  await page.screenshot({ path: "screenshots/play-craft-before.png" });
+  const quiet = () => page.waitForFunction(() => !document.querySelector(".toast"), null, { timeout: 15000 });
+  const kindsIn = (gr) => ev((g) => window.__game[g].items.map((i) => i.kind), gr);
+  for (const out of ["launcher", "stock", "scope"]) {
+    await page.locator("#btn-craft-" + out).scrollIntoViewIfNeeded();
+    expect(!(await ev((o) => document.getElementById("btn-craft-" + o).disabled, out)), `btn-craft-${out} should be enabled`);
+    await page.click("#btn-craft-" + out);
+    await frames(2);
+  }
+  const crafted = await ev(() => ({ pts: window.__game.points, stash: window.__game.stashGrid.items.map((i) => i.kind), saved: JSON.parse(localStorage.getItem("progress")).points }));
+  info.crafted = crafted;
+  const cnt = (k) => crafted.stash.filter((x) => x === k).length;
+  expect(["launcher", "stock", "scope"].every((k) => cnt(k) === 1), "crafted items missing from the stash: " + crafted.stash);
+  expect(crafted.pts === 500 - 20 - 10 - 15 && crafted.saved === crafted.pts, "craft points mismatch: " + crafted.pts);
+  expect(cnt("ore") === 1 && cnt("bio") === 1 && cnt("quartz") === 2, "craft materials mismatch: " + crafted.stash);
+  // a full stash refuses BEFORE spending
+  const refused = await ev(() => {
+    const g = window.__game, G = g.stashGrid, held = [...G.placed];
+    const p0 = g.points;
+    for (let y = 0; y < G.h; y++) for (let x = 0; x < G.w; x++) if (G.canPlace({ uid: 1, kind: "quartz", age: 0, fresh: 1 }, x, y, false)) G.place({ uid: 80000 + y * 20 + x, kind: "quartz", age: 0, fresh: 1 }, x, y, false);
+    const fillers = G.placed.filter((q) => q.item.uid >= 80000).map((q) => q.item);
+    g.progress.points = 500; // enough points, but also materials: add ore so only the room is missing
+    const why = g.craft("stock");
+    const out = { why, pts: g.progress.points, p0 };
+    for (const f of fillers) G.remove(f);
+    g.progress.points = p0;
+    g.refreshResearch();
+    return out;
+  });
+  info.refused = refused;
+  expect(refused.why !== null && refused.pts === 500, "crafting into a full stash should be refused without spending: " + JSON.stringify(refused));
+
+  // mods: select the launcher, then the stock -> attach; the launcher grows by one cell
+  await page.click("#tab-stash");
+  await frames(3);
+  const sizeOf = () => ev(() => { const p = window.__game.stashGrid.placed.find((q) => q.item.kind === "launcher"); const d = p.rot ? { w: 1, h: 3 } : { w: 3, h: 1 }; return { rot: p.rot, w: d.w + (p.item.mods?.stock ? (p.rot ? 0 : 1) : 0), h: d.h + (p.item.mods?.stock && p.rot ? 1 : 0), mods: Object.keys(p.item.mods ?? {}) }; });
+  const size0 = await sizeOf();
+  const pick = async (kind) => { await page.locator(`#grid-stash [data-kind="${kind}"]`).first().click(); await frames(2); };
+  expect(await ev(() => document.getElementById("btn-attach").disabled), "attach should start disabled");
+  await pick("launcher");
+  expect(await ev(() => document.getElementById("btn-analyze").disabled), "analyze must be disabled for gear");
+  await pick("stock");
+  expect(!(await ev(() => document.getElementById("btn-attach").disabled)), "attach should be enabled with launcher + stock chosen");
+  await page.click("#btn-attach");
+  await frames(3);
+  const size1 = await sizeOf();
+  expect(size1.w + size1.h === size0.w + size0.h + 1 && size1.mods.includes("stock"), `stock should lengthen the launcher: ${JSON.stringify([size0, size1])}`);
+  await pick("launcher");
+  await pick("scope");
+  await page.click("#btn-attach");
+  await frames(3);
+  // detach + re-attach the scope through the buttons
+  await pick("launcher");
+  expect(!(await ev(() => document.getElementById("btn-detach-sight").disabled)), "detach-sight should be enabled");
+  await page.click("#btn-detach-sight");
+  await frames(3);
+  expect((await kindsIn("stashGrid")).includes("scope") && !(await sizeOf()).mods.includes("sight"), "detached scope should return to the stash");
+  await pick("scope");
+  await pick("launcher");
+  await pick("scope");
+  await page.click("#btn-attach");
+  await frames(3);
+  const size2 = await sizeOf();
+  info.mods = { size0, size1, size2 };
+  expect(size2.mods.includes("stock") && size2.mods.includes("sight"), "launcher should carry stock and scope: " + JSON.stringify(size2));
+  expect(!(await kindsIn("stashGrid")).some((k) => k === "stock" || k === "scope"), "mods should be consumed from the stash on attach");
+  // pack a quartz, equip the launcher
+  info.beforePack = await ev(() => window.__game.stashGrid.items.map((i) => i.kind));
+  await quiet();
+  await page.screenshot({ path: "screenshots/play-mods.png" });
+  await pick("quartz");
+  await page.click("#btn-pack");
+  await frames(3);
+  expect((await kindsIn("packGrid")).includes("quartz"), "quartz should be in the pre-raid pack");
+  await pick("launcher");
+  await page.click("#btn-equip");
+  await frames(3);
+  const eq = await ev(() => ({ kind: window.__game.equipped?.kind, mods: Object.keys(window.__game.equipped?.mods ?? {}), inStash: window.__game.stashGrid.items.some((i) => i.kind === "launcher"), saved: localStorage.getItem("loadout.weapon") }));
+  info.equip = eq;
+  expect(eq.kind === "launcher" && eq.mods.length === 2 && !eq.inStash && eq.saved, "equip failed: " + JSON.stringify(eq));
+  expect((await ev(() => document.getElementById("equip-slot").innerText)).includes("개머리판"), "equip slot should show the stock badge");
+  await quiet();
+  await page.screenshot({ path: "screenshots/play-loadout.png" });
+  await page.click("#tab-craft");
+  await frames(3);
+  await ev(() => document.getElementById("craft-pane").scrollTo(0, 0));
+  await page.screenshot({ path: "screenshots/play-craft.png" });
+  await page.click("#tab-stash");
+  await frames(2);
+
+  // raid with the launcher: recoil pushes the player backwards
+  await page.click("#btn-start");
+  await page.waitForFunction(() => window.__game.screen === "raid", null, { timeout: 5000 });
+  await frames(5);
+  await quiet();
+  const r4 = await ev(() => ({ kind: window.__game.raid.weaponKind, stock: !!window.__game.raid.weapon?.mods?.stock, pack: window.__game.raid.backpack.items.map((i) => i.kind), packLeft: window.__game.packGrid.items.length, equipped: window.__game.equipped }));
+  info.raid4 = r4;
+  expect(r4.kind === "launcher" && r4.stock, "raid should use the equipped launcher: " + JSON.stringify(r4));
+  expect(r4.pack.includes("quartz") && r4.packLeft === 0 && r4.equipped === null, "pack should move into the raid backpack: " + JSON.stringify(r4));
+  expect(await vis("#weapon-hud"), "weapon HUD missing");
+  info.weaponHud = await ev(() => document.getElementById("weapon-hud").textContent);
+  await ev(() => { const r = window.__game.raid, c = r.crawlers.find((q) => q.alive); if (c) { c.pos.x = r.player.pos.x + 4; c.pos.y = r.player.pos.y; c.vel.x = 0; c.vel.y = 0; } });
+  await frames(4);
+  const q0 = await ev(() => ({ ...window.__game.raid.player.pos }));
+  const n0 = await ev(() => window.__game.shots);
+  await page.keyboard.down("Space");
+  await page.waitForFunction((n) => window.__game.shots > n, n0, { timeout: 20000 });
+  await frames(2);
+  await page.screenshot({ path: "screenshots/play-raid-m4.png" });
+  await page.keyboard.up("Space");
+  await frames(6);
+  const q1 = await ev(() => ({ ...window.__game.raid.player.pos, f: { ...window.__game.raid.player.facing } }));
+  const push = (q1.x - q0.x) * q1.f.x + (q1.y - q0.y) * q1.f.y;
+  info.recoil = { push: +push.toFixed(3) };
+  expect(push < -0.02, "launcher recoil did not push the player backwards: " + push);
+
+  // extract: the launcher comes home equipped, mods intact
+  await toExtraction();
+  await page.click("#btn-hideout");
+  await page.waitForFunction(() => window.__game.screen === "hideout", null, { timeout: 5000 });
+  await frames(3);
+  const back = await ev(() => ({ kind: window.__game.equipped?.kind, mods: Object.keys(window.__game.equipped?.mods ?? {}).sort(), stash: window.__game.stashGrid.items.map((i) => i.kind) }));
+  info.back = back;
+  expect(back.kind === "launcher" && back.mods.join() === "sight,stock" && !back.stash.includes("launcher"), "launcher should be equipped again with its mods: " + JSON.stringify(back));
+  // persisted across a reload
+  await page.reload();
+  await page.waitForFunction(() => window.__ready === true, null, { timeout: 15000 });
+  await frames(3);
+  const reloaded = await ev(() => ({ kind: window.__game.equipped?.kind, mods: Object.keys(window.__game.equipped?.mods ?? {}).length }));
+  expect(reloaded.kind === "launcher" && reloaded.mods === 2, "equipped weapon not persisted: " + JSON.stringify(reloaded));
+  // unequip returns it to the stash
+  await page.click("#btn-unequip");
+  await frames(3);
+  expect((await ev(() => window.__game.equipped)) === null && (await kindsIn("stashGrid")).includes("launcher"), "unequip should return the launcher to the stash");
+
   info.fps = await ev(() => window.__fps);
 } catch (e) {
   errors.push("exception: " + (e?.stack || e));

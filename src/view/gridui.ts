@@ -1,14 +1,17 @@
 /** DOM grid inventory widgets shared by the in-raid bag and the hideout stash. */
 import { footprint, moveItem, type Grid } from "../game/inventory";
 import { ITEMS, itemValue, type Item, type ItemKind } from "../game/items";
-import { BATTERY_CAPACITY, WEAPONS } from "../game/weapons";
+import { BATTERY_CAPACITY, WEAPONS, type ProjectileWeapon } from "../game/weapons";
+
+/** J drawn from a battery per coilgun shot. */
+export const SHOT_ENERGY = (WEAPONS.coilgun as ProjectileWeapon).energy;
 
 export const SHORT: Record<ItemKind, string> = {
   quartz: "석영", ore: "광물", bio: "생물", launcher: "발사기", lens: "렌즈", coilgun: "코일건", battery: "전지", stock: "개머리판", scope: "조준경",
 };
 
 /** Coilgun shots left in a battery. */
-export function shotsLeft(it: Item) { return Math.floor((it.charge ?? 0) / WEAPONS.coilgun.energy); }
+export function shotsLeft(it: Item) { return Math.floor((it.charge ?? 0) / SHOT_ENERGY); }
 
 /** Second line of a block: research value for samples (or "?"), shots left for batteries, nothing for other gear. */
 function subText(it: Item, known: boolean): string {

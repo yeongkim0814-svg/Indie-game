@@ -19,6 +19,7 @@ export const VIEW_H = 180;
 const BLOCK = 8; // rock height in px (top face is raised by this much)
 
 interface Particle { x: number; y: number; vx: number; vy: number; g: number; life: number; max: number; color: string; size: number }
+interface Faller { x: number; y: number; t: number; seed: number }
 interface Drawable { y: number; draw: () => void }
 
 export class Renderer {
@@ -32,6 +33,7 @@ export class Renderer {
   private groundFor: ParsedMap | null = null;
   private particles: Particle[] = [];
   private flash = 0;
+  private fallers: Faller[] = [];
   private hitUntil = new WeakMap<Crawler, number>();
 
   constructor(readonly canvas: HTMLCanvasElement) {
@@ -59,7 +61,7 @@ export class Renderer {
       y: mh <= this.H ? (mh - this.H) / 2 : Math.min(mh - this.H, Math.max(-BLOCK, py)),
     };
   }
-  snapCamera(raid: Raid) { const c = this.camTarget(raid); this.camX = c.x; this.camY = c.y; this.particles.length = 0; this.flash = 0; }
+  snapCamera(raid: Raid) { const c = this.camTarget(raid); this.camX = c.x; this.camY = c.y; this.particles.length = 0; this.fallers.length = 0; this.flash = 0; }
 
   // ---------------------------------------------------------------- ground layer
   private buildGround(map: ParsedMap) {
@@ -168,7 +170,7 @@ export class Renderer {
     const moving = Math.hypot(p.vel.x, p.vel.y) > 0.4;
     const step = moving ? Math.floor(this.t * 9) & 1 : 0;
     this.shadow(fx, fy, 7);
-    const dark = "#142633", mid = "#24405a", lit = ROCK[4];
+    const dark = "#142633", mid = "#24405a", lit = ({ rifle: ROCK[4], launcher: "#e69a55", lens: "#ffe08a", coilgun: "#6fe8ff" } as Record<string, string>)[raid.weaponKind];
     // legs (alternate while walking)
     g.fillStyle = dark;
     g.fillRect(fx - 4, fy - 5 - step, 3, 5 + step); g.fillRect(fx + 1, fy - 5 - (1 - step) * (moving ? 1 : 0), 3, 5);
@@ -185,12 +187,16 @@ export class Renderer {
     // gun line toward facing
     const gx = fx, gy = fy - 10;
     g.fillStyle = lit;
-    for (let i = 4; i <= 11; i++) g.fillRect(Math.round(gx + p.facing.x * i), Math.round(gy + p.facing.y * i), 2, 2);
+    const gs = raid.weaponKind === "launcher" ? 3 : 2; // the launcher is a fat tube
+    for (let i = 4; i <= 11; i++) g.fillRect(Math.round(gx + p.facing.x * i), Math.round(gy + p.facing.y * i), gs, gs);
   }
 
-  private drawCrawler(c: Crawler, fx: number, fy: number, flash: boolean) {
+  private drawCrawler(c: Crawler, gx: number, gy: number, flash: boolean) {
     const g = this.ctx;
-    this.shadow(fx, fy, 6);
+    this.shadow(gx, gy, 6);
+    // knocked off its feet: lifted along a short arc over its shadow
+    const lift = c.airborne > 0 ? Math.round(5 * Math.sin(Math.PI * Math.min(1, 1 - c.airborne / RAID.crawler.knockAir))) : 0;
+    const fx = gx, fy = gy - lift;
     const body = flash ? "#ffffff" : "#5a2d2a", shell = flash ? "#ffffff" : "#8a4a3a", leg = flash ? "#ffffff" : "#2b1514";
     const step = Math.floor(this.t * 8 + c.pos.x * 3) & 1;
     g.fillStyle = leg;
@@ -201,6 +207,53 @@ export class Renderer {
     g.fillStyle = body; g.fillRect(fx - 5, fy - 6, 10, 5); g.fillRect(fx - 3, fy - 8, 6, 1); g.fillRect(fx - 4, fy - 2, 8, 1);
     g.fillStyle = shell; g.fillRect(fx - 4, fy - 7, 8, 2); g.fillRect(fx, fy - 5, 1, 4);
     g.fillStyle = flash ? "#ffffff" : "#f2c14e"; g.fillRect(fx - 2, fy - 6, 1, 1); g.fillRect(fx + 1, fy - 6, 1, 1);
+  }
+
+  /** rifle: small bright pellet; launcher: chunky dark 4×4 slug; coilgun: thin cyan streak along the flight line. */
+  private drawBullet(kind: string, b: Raid["bullets"][number], x: number, y: number) {
+    const g = this.ctx;
+    g.fillStyle = SHADOW; g.fillRect(x - 1, y + 3, kind === "launcher" ? 4 : 2, 1);
+    if (kind === "launcher") {
+      g.fillStyle = "#1a1412"; g.fillRect(x - 2, y - 7, 4, 4);
+      g.fillStyle = "#5a4636"; g.fillRect(x - 2, y - 7, 4, 1); g.fillRect(x - 2, y - 7, 1, 4);
+      return;
+    }
+    if (kind === "coilgun") {
+      const l = Math.hypot(b.vel.x, b.vel.y) || 1, dx = b.vel.x / l, dy = b.vel.y / l;
+      for (let i = 0; i < 12; i++) {
+        g.fillStyle = i === 0 ? "#ffffff" : i < 4 ? "#7ff0ff" : "#2aa8c8";
+        g.fillRect(Math.round(x - dx * i), Math.round(y - 4 - dy * i), 1, 1);
+      }
+      return;
+    }
+    g.fillStyle = "#fff4c0"; g.fillRect(x - 1, y - 5, 2, 2);
+  }
+
+  /** A crawler knocked over the cliff edge: shrinks, fades and drops away with a spin of its legs. */
+  private drawFaller(f: Faller, x: number, y: number) {
+    const g = this.ctx, k = Math.min(1, f.t / 0.7), s = 1 - 0.7 * k;
+    g.save();
+    g.globalAlpha = 1 - k;
+    g.translate(x, y + k * 14); g.scale(s, s);
+    this.drawCrawler({ pos: { x: f.seed, y: 0 }, vel: { x: 0, y: 0 }, hp: 0, alive: false, touchCooldown: 0, airborne: 0 }, 0, 0, false);
+    g.restore();
+  }
+
+  /** Focused sunlight: a warm white line from the lens to its target; width and alpha follow the sun. */
+  private drawBeam(raid: Raid, ox: number, oy: number) {
+    const b = raid.beam;
+    if (!b) return;
+    const g = this.ctx, I = Math.max(0, Math.min(1, b.intensity));
+    const x0 = b.from.x * TILE - ox, y0 = b.from.y * TILE - oy - 10, x1 = b.to.x * TILE - ox, y1 = b.to.y * TILE - oy - 4;
+    const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0)));
+    const w = I > 0.66 ? 3 : I > 0.33 ? 2 : 1, a = 0.3 + 0.7 * I, flick = 0.85 + 0.15 * Math.sin(this.t * 40);
+    for (let pass = 0; pass < 2; pass++) {
+      g.fillStyle = pass === 0 ? `rgba(255,214,140,${(a * 0.45 * flick).toFixed(3)})` : `rgba(255,248,224,${(a * flick).toFixed(3)})`;
+      const ww = pass === 0 ? w + 2 : w, off = Math.floor(ww / 2);
+      for (let i = 0; i <= n; i++) g.fillRect(Math.round(x0 + ((x1 - x0) * i) / n) - off, Math.round(y0 + ((y1 - y0) * i) / n) - off, ww, ww);
+    }
+    g.fillStyle = `rgba(255,255,255,${a.toFixed(3)})`; // burn spot on the target
+    g.fillRect(Math.round(x1) - 1, Math.round(y1) - 1, 3, 3);
   }
 
   private drawSample(fx: number, fy: number, k: number, it: Item) {
@@ -314,6 +367,7 @@ export class Renderer {
           }
           break;
         }
+        case "fall": this.fallers.push({ x, y, t: 0, seed: this.fallers.length }); break;
         case "wall": this.spawn(x, y, 4, [ROCK[4], ROCK[3]], 22, 0.3, { size: 2 }); break;
       }
     }
@@ -323,6 +377,8 @@ export class Renderer {
   private tickParticles(dt: number, ox: number, oy: number) {
     const g = this.ctx;
     this.particles = this.particles.filter((p) => (p.life -= dt) > 0);
+    for (const f of this.fallers) f.t += dt;
+    this.fallers = this.fallers.filter((f) => f.t < 0.7);
     for (const p of this.particles) {
       p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt;
       g.fillStyle = p.color;
@@ -370,7 +426,11 @@ export class Renderer {
     }
     for (const b of raid.bullets) {
       const bx = Math.round(b.pos.x * TILE), by = Math.round(b.pos.y * TILE);
-      if (vis(bx, by)) items.push({ y: by, draw: () => { g.fillStyle = SHADOW; g.fillRect(bx - ox - 1, by - oy + 3, 2, 1); g.fillStyle = "#fff4c0"; g.fillRect(bx - ox - 1, by - oy - 5, 2, 2); } });
+      if (vis(bx, by)) items.push({ y: by, draw: () => this.drawBullet(raid.weaponKind, b, bx - ox, by - oy) });
+    }
+    for (const f of this.fallers) {
+      const fx = Math.round(f.x), fy = Math.round(f.y) + 3;
+      items.push({ y: fy, draw: () => this.drawFaller(f, fx - ox, fy - oy) });
     }
     {
       const fx = Math.round(raid.player.pos.x * TILE), fy = Math.round(raid.player.pos.y * TILE) + 5;
@@ -389,6 +449,7 @@ export class Renderer {
     }
     while (idx < items.length) items[idx++].draw();
 
+    this.drawBeam(raid, ox, oy);
     if (raid.knowledge.has("physiology")) this.drawAggro(raid, ox, oy);
     this.tickParticles(dt, ox, oy);
     this.tint(raid.daylight);

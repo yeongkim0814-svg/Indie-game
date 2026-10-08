@@ -3,7 +3,7 @@ import { ITEMS, itemSize, itemValue, type GearKind, type Item, type ItemKind } f
 import { RAID, type Raid, type RaidState } from "../game/raid";
 import { FACILITIES, KNOWLEDGE, buildBlocker, hasFacility, knows, researchBlocker, type FacilityId, type KnowledgeId, type Progress } from "../game/knowledge";
 import { BATTERY_CAPACITY, MODS, RECIPES, WEAPONS, craftBlocker, isWeaponKind, modSlots, type Recipe, type WeaponKind } from "../game/weapons";
-import { GridView, ItemController, SHORT } from "./gridui";
+import { GridView, ItemController, SHORT, SHOT_ENERGY } from "./gridui";
 import { carriedValueText } from "./know";
 import type { Renderer } from "./render";
 
@@ -26,7 +26,7 @@ export function recipeInfo(out: GearKind): { kind: string; law: string; weakness
     weakness: `${ITEMS.scope.mass} kg이 더해진다. 멀리 볼 뿐 화력은 그대로다`,
   };
   return {
-    kind: "소모품", law: `${BATTERY_CAPACITY} J 저장 → 코일건 ${Math.floor(BATTERY_CAPACITY / WEAPONS.coilgun.energy)}발 (발당 ${WEAPONS.coilgun.energy} J)`,
+    kind: "소모품", law: `${BATTERY_CAPACITY} J 저장 → 코일건 ${Math.floor(BATTERY_CAPACITY / SHOT_ENERGY)}발 (발당 ${SHOT_ENERGY} J)`,
     weakness: "쓸수록 줄어든다. 원정에 가져가려면 먼저 배낭에 넣어 두어야 한다",
   };
 }
@@ -113,7 +113,7 @@ export class Hud {
     this.equipCard = el("div", "equip", "", eq);
     this.equipCard.id = "equip-slot";
     const pk = el("div", "loadout-col", "", loadout);
-    el("div", "bag-lbl", "원정 배낭 — 전지는 여기 담아 가져가세요", pk);
+    el("div", "bag-lbl", "원정 배낭 (전지 휴대)", pk);
     this.packView = new GridView(new Grid(5, 3), PACK_CELL, this.stashCtl, "grid-pack");
     pk.append(this.packView.el);
     this.researchPane = el("div", "research-pane", "", left);
@@ -228,6 +228,9 @@ export class Hud {
     this.renderEquip();
     this.refreshSelection();
   }
+
+  /** The weapon a mod would be attached to: the last weapon selected in the stash. */
+  get modTargetItem(): Item | null { return this.modTarget; }
 
   private renderEquip() {
     const w = this.equipped, c = this.equipCard;
@@ -416,7 +419,7 @@ export class Hud {
     const st = `${(raid.backpack.mass + raid.notebook.mass).toFixed(1)}kg · 가치 ${carriedValueText(raid.knowledge, raid.carriedItems)} · ${Math.round(raid.temperature)}°C`;
     if (st !== this.last.n) { this.stats.textContent = st; this.last.n = st; }
     const wk = raid.weaponKind;
-    const wt = wk === "coilgun" ? `${raid.weaponStats.name} · 전지 ${Math.floor(raid.batteryCharge / WEAPONS.coilgun.energy)}발`
+    const wt = wk === "coilgun" ? `${raid.weaponStats.name} · 전지 ${Math.floor(raid.batteryCharge / SHOT_ENERGY)}발`
       : wk === "lens" ? `${raid.weaponStats.name} · 햇빛 ${Math.round(raid.sunlight * 100)}%` : raid.weaponStats.name;
     if (wt !== this.last.w) { this.last.w = wt; this.weaponHud.textContent = wt; this.weaponHud.dataset.kind = wk; }
     const prog = raid.extractProgress;

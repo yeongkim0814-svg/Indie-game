@@ -1,13 +1,14 @@
-import type { Grid } from "./game/inventory";
-import { ITEMS, itemValue } from "./game/items";
+import { Grid } from "./game/inventory";
+import { ITEMS, itemValue, makeItem, type GearKind, type Item } from "./game/items";
 import { FACILITIES, build, research, type Progress } from "./game/knowledge";
+import { RECIPES, attachMod, craft, craftBlocker, detachMod, modSlots } from "./game/weapons";
 import { RAID, Raid, type RaidState } from "./game/raid";
 import { FIRST_MAP } from "./game/raidMap";
 import { BagPanel } from "./view/bag";
 import { Hud } from "./view/hud";
 import { Input } from "./view/input";
 import { Renderer } from "./view/render";
-import { depositAll, loadProgress, loadStash, saveProgress, saveStash, stockOf, takeMaterials } from "./view/stash";
+import { PACK_SIZE, depositAll, loadPack, loadProgress, loadStash, loadWeapon, saveWeapon, savePack, saveProgress, saveStash, stockOf, takeMaterials } from "./view/stash";
 
 type Screen = "hideout" | "raid" | "results";
 const STEP = 1 / 120;
@@ -17,6 +18,7 @@ declare global {
     __game?: {
       readonly raid: Raid; input: Input; startRaid(): void; readonly screen: Screen; readonly shots: number;
       readonly stashGrid: Grid; readonly points: number; readonly progress: Progress; refreshResearch(): void; readonly bagOpen: boolean; openBag(open?: boolean): void;
+      readonly equipped: Item | null; readonly packGrid: Grid; craft(out: GearKind): string | null; saveAll(): void;
     };
     __ready?: boolean; __frame?: number; __fps?: number;
   }
@@ -33,14 +35,27 @@ let screen: Screen = "hideout";
 let raid = new Raid(FIRST_MAP, 1); // hideout shows a frozen preview of the map
 let stash = loadStash();
 let progress = loadProgress();
+let equipped: Item | null = loadWeapon(); // the weapon in the loadout slot
+let pack = loadPack(); // items to carry into the next raid
+let lastEmptyToast = -1e9;
 let acc = 0, shots = 0, last = performance.now(), fps = 60;
 renderer.snapCamera(raid);
 hud.getResearchData = () => ({ progress, stock: stockOf(stash) });
+hud.canStore = (kind) => !!stash.findSpot(makeItem(kind));
 hud.setStash(stash, progress.points);
-hud.stashCtl.onChange = () => saveStash(stash);
+hud.setLoadout(equipped, pack);
+const saveAll = () => { saveStash(stash); savePack(pack); saveWeapon(equipped); saveProgress(progress); };
+hud.stashCtl.onChange = () => { saveStash(stash); savePack(pack); hud.refreshSelection(); };
 
 function startRaid() {
-  raid = new Raid(undefined, (Date.now() & 0xffff) || 1, progress.knowledge);
+  // the equipped weapon and the pack travel with the player; they only come back on extraction
+  const weapon = equipped ?? undefined;
+  raid = new Raid(undefined, (Date.now() & 0xffff) || 1, progress.knowledge, { weapon, pack: pack.items });
+  equipped = null;
+  // anything that did not fit the raid backpack goes back to the stash instead of vanishing
+  for (const it of pack.items) if (!raid.backpack.items.includes(it)) stash.autoPlace(it);
+  pack = new Grid(PACK_SIZE.w, PACK_SIZE.h);
+  saveAll();
   input.setDashAvailable(raid.canDash);
   input.setDashCooldown(0);
   renderer.snapCamera(raid);
@@ -56,9 +71,13 @@ function finishRaid() {
   input.setEnabled(false);
   bag.setVisible(false);
   const res = raid.result();
+  // the equipped weapon returns to its slot (extraction only); everything else goes to the stash
+  const weapon = raid.weapon && res.items.includes(raid.weapon) ? raid.weapon : null;
+  if (weapon) equipped = weapon;
+  const rest = res.items.filter((it) => it !== weapon);
   // value is frozen at extraction: stash items are never aged
-  const lost = depositAll(stash, res.items);
-  saveStash(stash);
+  const lost = depositAll(stash, rest);
+  saveAll();
   screen = "results";
   hud.showResults(res.state as RaidState, res.items.filter((it) => !lost.includes(it)), lost);
 }
@@ -69,11 +88,12 @@ hud.hideoutBtn.addEventListener("click", () => {
   renderer.snapCamera(raid);
   screen = "hideout";
   hud.setStash(stash, progress.points);
+  hud.setLoadout(equipped, pack);
   hud.show("hideout");
 });
 hud.analyzeBtn.addEventListener("click", () => {
   const it = hud.stashCtl.selectedItem;
-  if (!it || !stash.remove(it)) return;
+  if (!it || ITEMS[it.kind].gear || !stash.remove(it)) return;
   progress.points += Math.round(itemValue(it));
   saveProgress(progress);
   saveStash(stash);
@@ -90,6 +110,102 @@ hud.onResearch = (id) => {
   if (!research(progress, id)) return;
   saveProgress(progress);
   hud.refreshResearch();
+};
+
+// ---- crafting ------------------------------------------------------------------------------------
+/** Craft one item. Returns null on success, otherwise the reason it was refused (nothing is spent on a refusal). */
+function craftItem(out: GearKind): string | null {
+  const r = RECIPES.find((q) => q.out === out);
+  if (!r) return "알 수 없는 설계";
+  const stock = stockOf(stash);
+  const why = craftBlocker(progress, r, stock);
+  if (why) return why;
+  if (!hud.canStore(out)) return "창고 공간 부족"; // checked BEFORE spending anything
+  const item = craft(progress, r, stock);
+  if (!item) return "제작 실패";
+  for (const [k, n] of Object.entries(r.materials) as [keyof typeof ITEMS, number][]) takeMaterials(stash, k, n, itemValue);
+  stash.autoPlace(item);
+  saveAll();
+  return null;
+}
+hud.onCraft = (out) => {
+  const why = craftItem(out);
+  hud.toast(why ?? `${ITEMS[out].name} 제작`);
+  hud.setPoints(progress.points);
+  hud.refreshResearch();
+};
+
+// ---- mods ----------------------------------------------------------------------------------------
+function findIn(g: Grid, it: Item) { return g.placed.find((q) => q.item === it); }
+
+hud.onAttach = () => {
+  const mod = hud.stashCtl.selectedItem;
+  const wpn = hud.modTargetItem;
+  if (!mod || !wpn || hud.stashCtl.selected?.view !== hud.stashView) return;
+  const slot = mod.kind === "stock" ? "stock" : "sight";
+  const wp = findIn(stash, wpn), mp = findIn(stash, mod);
+  if (!wp || !mp || !modSlots(wpn.kind).includes(slot)) return;
+  const wOld = { ...wp }, mOld = { ...mp };
+  stash.remove(mod); stash.remove(wpn);
+  if (!attachMod(wpn, mod)) { stash.placed.push(wOld, mOld); return; }
+  // a stock lengthens the weapon: try its old spot, else anywhere
+  let ok = stash.place(wpn, wOld.x, wOld.y, wOld.rot);
+  if (!ok) ok = stash.autoPlace(wpn);
+  if (!ok) {
+    detachMod(wpn, slot);
+    stash.place(wpn, wOld.x, wOld.y, wOld.rot); stash.place(mod, mOld.x, mOld.y, mOld.rot);
+    hud.toast("창고에 길어진 무기가 들어갈 자리가 없습니다");
+  } else hud.toast(`${ITEMS[mod.kind].name} 부착`);
+  saveStash(stash);
+  hud.stashCtl.clear();
+  hud.refreshSelection();
+};
+hud.onDetach = (slot) => {
+  const wpn = hud.stashCtl.selectedItem;
+  if (!wpn || !wpn.mods?.[slot] || !findIn(stash, wpn)) return;
+  const mod = detachMod(wpn, slot)!;
+  if (!stash.autoPlace(mod)) { attachMod(wpn, mod); hud.toast("창고 공간 부족"); return; }
+  hud.toast(`${ITEMS[mod.kind].name} 분리`);
+  saveStash(stash);
+  hud.refreshSelection();
+};
+
+// ---- loadout -------------------------------------------------------------------------------------
+hud.onEquip = () => {
+  const wpn = hud.stashCtl.selectedItem;
+  const pl = wpn && findIn(stash, wpn);
+  if (!wpn || !pl || !modSlots(wpn.kind).length) return;
+  stash.remove(wpn);
+  if (equipped && !stash.autoPlace(equipped)) { stash.placed.push(pl); hud.toast("창고 공간 부족"); return; }
+  equipped = wpn;
+  saveAll();
+  hud.setLoadout(equipped, pack);
+  hud.stashCtl.clear();
+};
+hud.onUnequip = () => {
+  if (!equipped) return;
+  if (!stash.autoPlace(equipped)) { hud.toast("창고 공간 부족"); return; }
+  equipped = null;
+  saveAll();
+  hud.setLoadout(equipped, pack);
+};
+hud.onPack = () => {
+  const it = hud.stashCtl.selectedItem;
+  if (!it || !findIn(stash, it)) return;
+  const pl = findIn(stash, it)!;
+  stash.remove(it);
+  if (!pack.autoPlace(it)) { stash.placed.push(pl); hud.toast("배낭 공간 부족"); return; }
+  saveAll();
+  hud.stashCtl.clear();
+};
+hud.onUnpack = () => {
+  const it = hud.stashCtl.selectedItem;
+  if (!it || !findIn(pack, it)) return;
+  const pl = findIn(pack, it)!;
+  pack.remove(it);
+  if (!stash.autoPlace(it)) { pack.placed.push(pl); hud.toast("창고 공간 부족"); return; }
+  saveAll();
+  hud.stashCtl.clear();
 };
 addEventListener("resize", () => { renderer.resize(); if (screen === "hideout") hud.setStash(stash, progress.points); });
 
@@ -109,6 +225,12 @@ function frame(now: number) {
         const s = raid.samples.find((q) => q.taken && q.pos.x === e.x && q.pos.y === e.y);
         hud.toast(s ? `${ITEMS[s.item.kind].name} 획득` : "획득");
       } else if (e.kind === "full") hud.toast("가방이 가득 찼습니다");
+      else if (e.kind === "empty") {
+        if (now - lastEmptyToast > 1500) { lastEmptyToast = now; hud.toast("전지가 비었습니다"); }
+      } else if (e.kind === "fall") {
+        const s = renderer.worldToScreen(e.x, e.y - 0.6);
+        hud.floatLabel("추락", s.x, s.y);
+      }
     }
     if (raid.state !== "running") finishRaid();
   }
@@ -130,9 +252,13 @@ window.__game = {
   get stashGrid() { return stash; },
   get points() { return progress.points; },
   get progress() { return progress; },
-  refreshResearch() { hud.setStash(stash, progress.points); },
+  refreshResearch() { hud.setStash(stash, progress.points); hud.setLoadout(equipped, pack); },
   get bagOpen() { return bag.open; },
   openBag(open = true) { bag.setOpen(open); },
+  get equipped() { return equipped; },
+  get packGrid() { return pack; },
+  craft(out: GearKind) { const why = craftItem(out); hud.setPoints(progress.points); hud.refreshResearch(); return why; },
+  saveAll,
 };
 window.__frame = 0;
 window.__ready = true;
