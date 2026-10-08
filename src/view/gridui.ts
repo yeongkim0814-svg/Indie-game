@@ -1,14 +1,36 @@
 /** DOM grid inventory widgets shared by the in-raid bag and the hideout stash. */
 import { footprint, moveItem, type Grid } from "../game/inventory";
 import { ITEMS, itemValue, type Item, type ItemKind } from "../game/items";
+import { BATTERY_CAPACITY, WEAPONS } from "../game/weapons";
 
-export const SHORT: Record<ItemKind, string> = { quartz: "석영", ore: "광물", bio: "생물" };
+export const SHORT: Record<ItemKind, string> = {
+  quartz: "석영", ore: "광물", bio: "생물", launcher: "발사기", lens: "렌즈", coilgun: "코일건", battery: "전지", stock: "개머리판", scope: "조준경",
+};
+
+/** Coilgun shots left in a battery. */
+export function shotsLeft(it: Item) { return Math.floor((it.charge ?? 0) / WEAPONS.coilgun.energy); }
+
+/** Second line of a block: research value for samples (or "?"), shots left for batteries, nothing for other gear. */
+function subText(it: Item, known: boolean): string {
+  if (it.kind === "battery") return `${shotsLeft(it)}발`;
+  if (ITEMS[it.kind].gear) return "";
+  return known ? String(Math.round(itemValue(it))) : "?";
+}
+
+/** Fill-bar fraction: freshness of a sample, charge of a battery. */
+function barFrac(it: Item, known: boolean): number {
+  if (it.kind === "battery") return Math.max(0, Math.min(1, (it.charge ?? 0) / BATTERY_CAPACITY));
+  if (ITEMS[it.kind].gear || !known) return 0;
+  return itemValue(it) / ITEMS[it.kind].value;
+}
+
+function modKey(it: Item) { return `${it.mods?.stock ? "s" : ""}${it.mods?.sight ? "c" : ""}`; }
 const DRAG_PX = 6;
 
 /** One grid on screen: cell backdrop plus an absolutely positioned block per placed item. */
 export class GridView {
   readonly el = document.createElement("div");
-  private blocks = new Map<Item, { el: HTMLElement; key: string; val: HTMLElement; vtxt: string; bar: HTMLElement; btxt: string }>();
+  private blocks = new Map<Item, { el: HTMLElement; key: string; val: HTMLElement; vtxt: string; bar: HTMLElement; btxt: string; badges: HTMLElement; mkey: string }>();
   private preview = document.createElement("div");
 
   constructor(public grid: Grid, public cell: number, readonly ctl: ItemController, id?: string) {
@@ -60,11 +82,12 @@ export class GridView {
         const nm = document.createElement("span"); nm.className = "n"; nm.textContent = SHORT[p.item.kind];
         const val = document.createElement("span"); val.className = "v";
         const bar = document.createElement("i"); bar.className = "bar";
-        el.append(nm, val, bar);
+        const badges = document.createElement("span"); badges.className = "mods";
+        el.append(nm, badges, val, bar);
         const item = p.item;
         el.addEventListener("pointerdown", (e) => { e.stopPropagation(); this.ctl.press(this, item, e); });
         this.el.append(el);
-        b = { el, key: "", val, vtxt: "", bar, btxt: "" };
+        b = { el, key: "", val, vtxt: "", bar, btxt: "", badges, mkey: "" };
         this.blocks.set(p.item, b);
       }
       const key = `${p.x},${p.y},${f.w},${f.h},${c}`;
@@ -74,10 +97,20 @@ export class GridView {
         s.left = `${p.x * c + 1}px`; s.top = `${p.y * c + 1}px`; s.width = `${f.w * c - 2}px`; s.height = `${f.h * c - 2}px`;
       }
       const known = this.ctl.reveal(p.item);
-      const v = Math.round(itemValue(p.item)), vt = known ? String(v) : "?";
+      const vt = subText(p.item, known);
       if (vt !== b.vtxt) { b.vtxt = vt; b.val.textContent = vt; }
-      const bt = known ? `${Math.round((itemValue(p.item) / ITEMS[p.item.kind].value) * 100)}%` : "0%";
-      if (bt !== b.btxt) { b.btxt = bt; b.bar.style.width = bt; }
+      const bt = `${Math.round(barFrac(p.item, known) * 100)}%`;
+      if (bt !== b.btxt) { b.btxt = bt; b.bar.style.width = bt; b.bar.style.display = bt === "0%" && ITEMS[p.item.kind].gear && p.item.kind !== "battery" ? "none" : ""; }
+      const mk = modKey(p.item);
+      if (mk !== b.mkey) {
+        b.mkey = mk;
+        b.badges.replaceChildren();
+        for (const [on, label, cls] of [[p.item.mods?.stock, "개머리판", "stock"], [p.item.mods?.sight, "조준경", "sight"]] as const) {
+          if (!on) continue;
+          const t = document.createElement("i"); t.className = `badge ${cls}`; t.textContent = label;
+          b.badges.append(t);
+        }
+      }
       b.el.classList.toggle("sel", p.item === sel);
       b.el.classList.toggle("dragging", p.item === dragging);
     }
@@ -153,7 +186,7 @@ export class ItemController {
       this.ghost = document.createElement("div");
       this.ghost.className = "blk ghost";
       this.ghost.dataset.kind = p.item.kind;
-      this.ghost.innerHTML = `<span class="n">${SHORT[p.item.kind]}</span><span class="v">${this.reveal(p.item) ? Math.round(itemValue(p.item)) : "?"}</span>`;
+      this.ghost.innerHTML = `<span class="n">${SHORT[p.item.kind]}</span><span class="v">${subText(p.item, this.reveal(p.item))}</span>`;
       document.body.append(this.ghost);
     }
     if (p.dragging) this.updateDrag();

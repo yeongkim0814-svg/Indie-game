@@ -112,6 +112,41 @@
       #joy-knob { width: 44px; height: 44px; background: rgba(232,237,236,.55); border: 2px solid rgba(232,237,236,.8); box-sizing: border-box; }
       #btn-fire { position: fixed; right: calc(28px + env(safe-area-inset-right)); bottom: calc(26px + env(safe-area-inset-bottom)); width: 104px; height: 104px; border-radius: 50%; display: none; align-items: center; justify-content: center; line-height: 104px; text-align: center; font-weight: 800; font-size: 20px; color: #fff4c0; background: rgba(224, 82, 74, .45); border: 3px solid rgba(255, 244, 192, .75); touch-action: none; }
       #btn-fire.down { background: rgba(224, 82, 74, .85); transform: scale(.94); }
+
+      /* M4: gear, mods, loadout, craft */
+      .chip[data-kind="launcher"] { background: #d98b4a; } .chip[data-kind="lens"] { background: #ffe08a; } .chip[data-kind="coilgun"] { background: #5ac8e6; }
+      .chip[data-kind="battery"] { background: #8fe08a; } .chip[data-kind="stock"] { background: #b9a58a; } .chip[data-kind="scope"] { background: #a9b8d8; }
+      .blk[data-kind="launcher"], .equip[data-kind="launcher"] { background: #d98b4a; border: 2px solid #ffc88a; }
+      .blk[data-kind="lens"], .equip[data-kind="lens"] { background: #ffe08a; border: 2px solid #fff6cc; }
+      .blk[data-kind="coilgun"], .equip[data-kind="coilgun"] { background: #5ac8e6; border: 2px solid #b8f0ff; }
+      .blk[data-kind="battery"] { background: #8fe08a; border: 2px solid #d4ffd0; }
+      .blk[data-kind="stock"] { background: #b9a58a; border: 2px solid #e6d6bc; }
+      .blk[data-kind="scope"] { background: #a9b8d8; border: 2px solid #dbe4f6; }
+      .blk .mods { display: flex; gap: 2px; flex-wrap: wrap; justify-content: center; }
+      .blk .mods:empty { display: none; }
+      .badge { font-style: normal; font-size: 9px; font-weight: 800; line-height: 1; padding: 2px 3px; border-radius: 3px; background: #10181c; color: #f2e6a0; }
+      .badge.sight { color: #a9d8ff; }
+      .blk[data-kind="stock"] .v, .blk[data-kind="scope"] .v, .blk[data-kind="launcher"] .v, .blk[data-kind="lens"] .v, .blk[data-kind="coilgun"] .v { display: none; }
+      .loadout { display: flex; gap: 10px; align-items: flex-start; margin-top: 4px; }
+      .loadout-col { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+      .equip { box-sizing: border-box; width: 188px; min-height: 84px; padding: 6px 8px; border-radius: 8px; background: #5a6b73; border: 2px solid #8fa3ac; color: #10181c; display: flex; flex-direction: column; gap: 4px; text-align: left; justify-content: center; }
+      .equip[data-kind="rifle"] { background: #3b4d56; border-color: #567886; color: #e8edec; }
+      .equip-name { font-size: 15px; font-weight: 800; }
+      .equip-sub { font-size: 11px; font-weight: 700; opacity: .85; }
+      .equip .mods { display: flex; gap: 3px; }
+      .equip .badge { font-size: 10px; padding: 2px 4px; }
+      .acts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; width: 100%; }
+      .acts .btn.small { padding: 6px 4px; font-size: 13px; min-height: 36px; }
+      .hide-right { gap: 7px; max-width: 290px; }
+      .hide-right .title { font-size: 24px; }
+      .sel-info { min-height: 32px; font-size: 12px; }
+      .node-cost { font-size: 12px; font-weight: 700; color: #6fe0d0; }
+      .node-cost .lack { color: #ff8a7a; }
+      .node.craft .node-law { font-family: system-ui, sans-serif; font-weight: 600; }
+      .weapon-hud { position: absolute; left: calc(14px + env(safe-area-inset-left)); top: 34px; font: 700 13px/1 system-ui, sans-serif; color: #f2e6a0; background: rgba(18,32,39,.55); padding: 4px 8px; border-radius: 6px; }
+      #crawler-activity[style*="block"] ~ .weapon-hud { top: 58px; }
+      .float-label { position: fixed; z-index: 40; transform: translate(-50%, -50%); font: 800 15px system-ui, sans-serif; color: #ffd9a0; text-shadow: 0 1px 2px #122027, 0 0 3px #122027; pointer-events: none !important; animation: floatup 1s ease-out forwards; }
+      @keyframes floatup { from { opacity: 1; margin-top: 0; } to { opacity: 0; margin-top: -26px; } }
     </style>
   </head>
   <body>
