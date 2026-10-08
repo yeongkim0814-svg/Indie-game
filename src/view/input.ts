@@ -1,6 +1,6 @@
 import type { RaidInput } from "../game/raid";
 
-const JOY_RADIUS = 40; // CSS px of drag for full move magnitude
+const JOY_RADIUS = 30; // CSS px of drag for full move magnitude; small so reversing takes ≤ 2R of travel
 
 /** Soul Knight style input: floating joystick (left half), FIRE button (right), keyboard fallback. */
 export class Input {
@@ -114,7 +114,15 @@ export class Input {
 
   private drag(x: number, y: number) {
     let dx = x - this.origin.x, dy = y - this.origin.y;
-    const len = Math.hypot(dx, dy);
+    let len = Math.hypot(dx, dy);
+    // Floating stick: past the rim the base follows the finger, so reversing never means
+    // dragging all the way back to where the touch started.
+    if (len > JOY_RADIUS) {
+      const k = (len - JOY_RADIUS) / len;
+      this.origin.x += dx * k; this.origin.y += dy * k;
+      dx = x - this.origin.x; dy = y - this.origin.y; len = JOY_RADIUS;
+      place(this.base, this.origin.x, this.origin.y);
+    }
     const mag = Math.min(1, len / JOY_RADIUS);
     if (len > 0) { dx /= len; dy /= len; }
     this.joy = { x: dx * mag, y: dy * mag };

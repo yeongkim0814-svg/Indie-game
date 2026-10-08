@@ -68,6 +68,16 @@ try {
   info.joystick = { joyMove, dy: +(p1.y - p0.y).toFixed(2) };
   expect(Math.hypot(p1.x - p0.x, p1.y - p0.y) > 0.3 && joyMove.y > 0.9, "joystick drag did not move the player");
 
+  // Floating stick: overdrag far right, then a short move back must already steer left
+  await page.mouse.move(100, 200);
+  await page.mouse.down();
+  await page.mouse.move(250, 200, { steps: 6 });
+  await page.mouse.move(185, 200, { steps: 4 }); // 65 px back ≈ 2R
+  const rev = await ev(() => ({ ...window.__game.input.state.move }));
+  await page.mouse.up();
+  info.joystickReverse = rev;
+  expect(rev.x < -0.9, "reversing the stick needed a drag all the way back to the touch-down point");
+
   // Fire with Space
   const s0 = await ev(() => window.__game.shots);
   await page.keyboard.down("Space");
