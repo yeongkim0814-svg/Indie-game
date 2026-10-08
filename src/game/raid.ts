@@ -117,14 +117,18 @@ export class Raid {
     return this.map.rows[ty][tx] ?? "#";
   }
   /** Walkers are stopped by rock and by the cliff edge. */
-  blocksWalker(x: number, y: number) { const t = this.tileAt(x, y); return t === "#" || t === "~"; }
+  /** Rock and the cliff edge stop everyone; ledge paths stop crawlers (they never leave their zone). */
+  blocksWalker(x: number, y: number, crawler = false) { const t = this.tileAt(x, y); return t === "#" || t === "~" || (crawler && t === "="); }
+  /** "path" = ledge between zones (side-view camera, movement only), "arena" = everything else. */
+  zoneAt(x: number, y: number): "path" | "arena" { return this.tileAt(x, y) === "=" ? "path" : "arena"; }
+  get onPath() { return this.zoneAt(this.player.pos.x, this.player.pos.y) === "path"; }
   blocksBullet(x: number, y: number) { return this.tileAt(x, y) === "#"; }
 
   /** Does a circle overlap any blocking tile? */
-  private hits(x: number, y: number, r: number) {
+  private hits(x: number, y: number, r: number, crawler = false) {
     for (let ty = Math.floor(y - r); ty <= Math.floor(y + r); ty++) {
       for (let tx = Math.floor(x - r); tx <= Math.floor(x + r); tx++) {
-        if (!this.blocksWalker(tx + 0.5, ty + 0.5)) continue;
+        if (!this.blocksWalker(tx + 0.5, ty + 0.5, crawler)) continue;
         const cx = Math.max(tx, Math.min(x, tx + 1)), cy = Math.max(ty, Math.min(y, ty + 1));
         if ((x - cx) ** 2 + (y - cy) ** 2 < r * r) return true;
       }
@@ -133,11 +137,11 @@ export class Raid {
   }
 
   /** Move by vel·dt with axis-separated collision; blocked axes lose their velocity. */
-  private moveBody(pos: Vec2, vel: Vec2, r: number, dt: number) {
+  private moveBody(pos: Vec2, vel: Vec2, r: number, dt: number, crawler = false) {
     const nx = pos.x + vel.x * dt;
-    if (!this.hits(nx, pos.y, r)) pos.x = nx; else vel.x = 0;
+    if (!this.hits(nx, pos.y, r, crawler)) pos.x = nx; else vel.x = 0;
     const ny = pos.y + vel.y * dt;
-    if (!this.hits(pos.x, ny, r)) pos.y = ny; else vel.y = 0;
+    if (!this.hits(pos.x, ny, r, crawler)) pos.y = ny; else vel.y = 0;
   }
 
   /** Driven body: F = drive·dir − drag·v, a = F/M (semi-implicit Euler). */
@@ -197,8 +201,9 @@ export class Raid {
     p.cooldown = Math.max(0, p.cooldown - dt);
     this.beam = null;
     const W = this.weaponStats;
-    if (input.fire && W.type === "beam") this.fireBeam(W, dt);
-    else if (input.fire && p.cooldown <= 0 && W.type === "projectile") this.fireProjectile(W);
+    const fire = input.fire && !this.onPath; // ledge paths are movement-only
+    if (fire && W.type === "beam") this.fireBeam(W, dt);
+    else if (fire && p.cooldown <= 0 && W.type === "projectile") this.fireProjectile(W);
 
     // slugs: impulse J = m·u transfers to the target as knockback Δv = J/m_target
     const C = RAID.crawler;
@@ -235,7 +240,7 @@ export class Raid {
         // on its feet it brakes at the edge and never walks off
         this.drive(c.vel, chase && d > 0 ? { x: dx / d, y: dy / d } : { x: 0, y: 0 }, C.drive * this.crawlerActivity, C.drag, C.mass, dt);
       }
-      this.moveBody(c.pos, c.vel, C.radius, dt);
+      this.moveBody(c.pos, c.vel, C.radius, dt, true);
       c.touchCooldown = Math.max(0, c.touchCooldown - dt);
       if (d < C.radius + P.radius + 0.05 && c.touchCooldown <= 0) {
         c.touchCooldown = C.touchCooldown;
@@ -282,7 +287,7 @@ export class Raid {
   private spawnAtEdge() {
     for (let i = 0; i < 20; i++) {
       const x = 1.5 + this.rand() * (this.map.w - 3), y = 1.5 + this.rand() * (this.map.h - 3);
-      if (this.hits(x, y, RAID.crawler.radius) || Math.hypot(x - this.player.pos.x, y - this.player.pos.y) < 12) continue;
+      if (this.hits(x, y, RAID.crawler.radius, true) || Math.hypot(x - this.player.pos.x, y - this.player.pos.y) < 12) continue;
       this.crawlers.push(this.newCrawler({ x, y }));
       return;
     }

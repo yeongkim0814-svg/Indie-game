@@ -199,3 +199,41 @@ describe("M3 knowledge in the raid", () => {
   });
 });
 
+
+describe("zones and ledge paths", () => {
+  const LEDGE = ["#############", "#P..====..c.#", "#############"];
+
+  it("the player walks a ledge; crawlers stop at its mouth", () => {
+    const r = new Raid(LEDGE);
+    run(r, 3, move(1, 0));
+    expect(r.player.pos.x).toBeGreaterThan(7);
+    const c = new Raid(["#############", "#c..====..P.#", "#############"]);
+    run(c, 10);
+    expect(c.zoneAt(c.crawlers[0].pos.x, c.crawlers[0].pos.y)).toBe("arena");
+    expect(c.crawlers[0].pos.x).toBeLessThan(4);
+    expect(c.player.hp).toBe(RAID.player.hp);
+  });
+
+  it("ledge paths are movement-only: no firing there", () => {
+    const r = new Raid(["#########", "#P.===.c#", "#########"]);
+    r.player.pos.x = 4.5; // on the ledge
+    run(r, 0.5, { move: { x: 0, y: 0 }, fire: true });
+    expect(r.onPath).toBe(true);
+    expect(r.bullets).toHaveLength(0);
+  });
+
+  it("every sample, gear cache and the extraction are reachable on the first map", () => {
+    const r = new Raid();
+    const key = (x: number, y: number) => `${x},${y}`;
+    const s = r.map.start, seen = new Set([key(Math.floor(s.x), Math.floor(s.y))]), q = [[Math.floor(s.x), Math.floor(s.y)]];
+    while (q.length) {
+      const [x, y] = q.pop()!;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx, ny = y + dy;
+        if (!r.blocksWalker(nx + 0.5, ny + 0.5) && !seen.has(key(nx, ny))) { seen.add(key(nx, ny)); q.push([nx, ny]); }
+      }
+    }
+    for (const p of [...r.map.samples, r.map.extraction]) expect(seen.has(key(Math.floor(p.x), Math.floor(p.y)))).toBe(true);
+    expect(r.map.rows.join("").includes("=")).toBe(true);
+  });
+});
