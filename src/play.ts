@@ -8,6 +8,7 @@ import { BagPanel } from "./view/bag";
 import { Hud } from "./view/hud";
 import { Input } from "./view/input";
 import { Renderer } from "./view/render";
+import { controls } from "./view/iso/controls";
 import { PACK_SIZE, depositAll, loadPack, loadProgress, loadStash, loadWeapon, saveWeapon, savePack, saveProgress, saveStash, stockOf, takeMaterials } from "./view/stash";
 
 type Screen = "hideout" | "raid" | "results";
@@ -19,8 +20,15 @@ declare global {
       readonly raid: Raid; input: Input; startRaid(): void; readonly screen: Screen; readonly shots: number;
       readonly stashGrid: Grid; readonly points: number; readonly progress: Progress; refreshResearch(): void; readonly bagOpen: boolean; openBag(open?: boolean): void;
       readonly equipped: Item | null; readonly packGrid: Grid; craft(out: GearKind): string | null; saveAll(): void;
-      /** lookout ease 0..1, render zoom (1..~1.67) and the knowledge reveals shown so far in this raid */
+      /** ledge pull-back ease 0..1, render zoom (1..~1.67) and the knowledge reveals shown so far in this raid */
       readonly lookout: number; readonly zoom: number; readonly revealed: string[];
+      /** camera state (degrees), zone, see-through rock count, render timing; `paused` freezes sim + camera time for screenshots */
+      readonly cam: { yaw: number; pitch: number; mode: string; u: number; background: number };
+      readonly zone: "path" | "arena"; readonly seeThrough: number;
+      readonly perf: { drawMs: number; sceneMs: number; terrainBuilds: number; terrainBuildMs: number; usedCache: boolean };
+      paused: boolean;
+      /** snap the camera to the player's zone (after a teleport) */
+      snapCamera(): void;
     };
     __ready?: boolean; __frame?: number; __fps?: number;
   }
@@ -40,7 +48,7 @@ let progress = loadProgress();
 let equipped: Item | null = loadWeapon(); // the weapon in the loadout slot
 let pack = loadPack(); // items to carry into the next raid
 let lastEmptyToast = -1e9;
-let acc = 0, shots = 0, last = performance.now(), fps = 60;
+let acc = 0, shots = 0, last = performance.now(), fps = 60, paused = false;
 renderer.snapCamera(raid);
 renderer.onReveal = (_id, text) => hud.toast(text);
 hud.getResearchData = () => ({ progress, stock: stockOf(stash) });
@@ -213,15 +221,16 @@ hud.onUnpack = () => {
 addEventListener("resize", () => { renderer.resize(); if (screen === "hideout") hud.setStash(stash, progress.points); });
 
 function frame(now: number) {
-  const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+  const rawDt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+  const dt = paused ? 0 : rawDt;
   last = now;
-  if (dt > 0) fps += (1 / dt - fps) * 0.1;
+  if (rawDt > 0) fps += (1 / rawDt - fps) * 0.1;
   const portrait = innerHeight > innerWidth;
   hud.setPortrait(portrait);
 
   if (screen === "raid" && !portrait) {
     acc += dt;
-    while (acc >= STEP && raid.state === "running") { raid.step(STEP, input.state); input.consumeDash(); acc -= STEP; }
+    while (acc >= STEP && raid.state === "running") { raid.step(STEP, controls(raid, input.state, renderer.yaw)); input.consumeDash(); acc -= STEP; }
     for (const e of raid.events) {
       if (e.kind === "shot") shots++;
       else if (e.kind === "pickup") {
@@ -231,11 +240,14 @@ function frame(now: number) {
       else if (e.kind === "empty") {
         if (now - lastEmptyToast > 1500) { lastEmptyToast = now; hud.toast("전지가 비었습니다"); }
       } else if (e.kind === "fall") {
-        const s = renderer.worldToScreen(e.x, e.y - 0.6);
+        const s = renderer.worldToScreen(e.x, e.y, 0.8);
         hud.floatLabel("추락", s.x, s.y);
       }
     }
     if (raid.state !== "running") finishRaid();
+    // ledge paths are movement-only: no fire button there (nor while the bag is open)
+    const lock = bag.open || raid.onPath;
+    if (input.isFireLocked !== lock) input.setFireLocked(lock);
   }
   const mv = input.state.move;
   const busy = input.state.fire || Math.hypot(mv.x, mv.y) > 0.05 || bag.open;
@@ -268,6 +280,19 @@ window.__game = {
   get lookout() { return renderer.lookout; },
   get zoom() { return renderer.zoom; },
   get revealed() { return [...renderer.revealed]; },
+  get cam() {
+    const r = renderer.rig;
+    return { yaw: (r.yaw * 180) / Math.PI, pitch: (r.pitch * 180) / Math.PI, mode: r.mode as string, u: r.u, background: r.background };
+  },
+  get zone() { return raid.zoneAt(raid.player.pos.x, raid.player.pos.y); },
+  get seeThrough() { return renderer.scene.seeThrough; },
+  get perf() {
+    const s = renderer.scene;
+    return { drawMs: renderer.drawMs, sceneMs: s.lastMs, terrainBuilds: s.terrainBuilds, terrainBuildMs: s.terrainBuildMs, usedCache: s.usedCache };
+  },
+  get paused() { return paused; },
+  set paused(v: boolean) { paused = v; },
+  snapCamera() { renderer.snapCamera(raid); },
 };
 window.__frame = 0;
 window.__ready = true;

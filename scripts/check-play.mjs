@@ -1,4 +1,5 @@
-// Headless check of the 2D quarter-view raid: hideout -> raid -> move/aim/fire -> extract -> results.
+// Headless check of the two-camera raid (isometric arenas, side-view ledges): hideout -> raid -> move/aim/fire -> extract -> results,
+// plus the camera/zone rules (camera II in arenas, camera I + vista on ledges, swing, see-through, lane, no fire on paths).
 import { chromium } from "playwright-core";
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
@@ -24,6 +25,7 @@ try {
   };
   const ev = (fn, arg) => page.evaluate(fn, arg);
   const expect = (cond, msg) => { if (!cond) errors.push(msg); };
+  const near = (a, b, tol) => Math.abs(a - b) <= tol;
   mkdirSync("screenshots", { recursive: true });
 
   await frames(5);
@@ -39,6 +41,7 @@ try {
   await page.waitForFunction(() => window.__game.screen === "raid", null, { timeout: 5000 });
   expect((await ev(() => window.__game.raid.state)) === "running", "raid should be running");
   await frames(10);
+  await ev(() => { window.__game.raid.player.hp = 99; }); // crawlers wander in; the movement checks must not die
   await page.screenshot({ path: "screenshots/play-raid.png" });
   const vis = (sel) => ev((q) => { const e = document.querySelector(q); return !!e && getComputedStyle(e).display !== "none" && e.getBoundingClientRect().width > 0; }, sel);
   expect(await vis("#sun-dial"), "sun dial should be shown without celestial");
@@ -104,7 +107,7 @@ try {
     const g = window.__game.raid;
     const sm = g.samples.find((q) => !q.taken && q.item.kind === k);
     if (!sm) return -1;
-    g.player.pos.x = sm.pos.x; g.player.pos.y = sm.pos.y; g.player.vel.x = 0; g.player.vel.y = 0; g.player.hp = 6;
+    g.player.pos.x = sm.pos.x; g.player.pos.y = sm.pos.y; g.player.vel.x = 0; g.player.vel.y = 0; g.player.hp = 99;
     return sm.item.uid;
   }, kind);
   const kinds = (grid) => ev((gr) => window.__game.raid[gr].items.map((i) => i.kind), grid);
@@ -260,6 +263,7 @@ try {
   await page.click("#btn-start");
   await page.waitForFunction(() => window.__game.screen === "raid", null, { timeout: 5000 });
   await frames(10);
+  await ev(() => { window.__game.raid.player.hp = 99; });
   expect(await ev(() => window.__game.raid.canDash), "raid.canDash should be true");
   expect(await vis("#raid-timer"), "mm:ss timer should be shown with celestial");
   expect(!(await vis("#sun-dial")), "sun dial should be hidden with celestial");
@@ -420,6 +424,7 @@ try {
   await page.click("#btn-start");
   await page.waitForFunction(() => window.__game.screen === "raid", null, { timeout: 5000 });
   await frames(5);
+  await ev(() => { window.__game.raid.player.hp = 99; });
   await quiet();
   const r4 = await ev(() => ({ kind: window.__game.raid.weaponKind, stock: !!window.__game.raid.weapon?.mods?.stock, pack: window.__game.raid.backpack.items.map((i) => i.kind), packLeft: window.__game.packGrid.items.length, equipped: window.__game.equipped }));
   info.raid4 = r4;
@@ -461,13 +466,153 @@ try {
   await frames(3);
   expect((await ev(() => window.__game.equipped)) === null && (await kindsIn("stashGrid")).includes("launcher"), "unequip should return the launcher to the stash");
 
-  // ---- M5: vista layers, lookout, knowledge reveals --------------------------------------------
+  // ---- M6: two cameras. Camera II (yaw 45 / pitch 30) in arenas, camera I (yaw 0 / pitch 12, vista) on ledge paths ----------
+  const cam = () => ev(() => ({ ...window.__game.cam }));
+  const teleport = (x, y) => ev(([x, y]) => {
+    const r = window.__game.raid;
+    r.player.pos.x = x; r.player.pos.y = y; r.player.vel.x = r.player.vel.y = 0; r.player.hp = 99;
+    window.__game.snapCamera();
+  }, [x, y]);
+  await page.click("#btn-start");
+  await page.waitForFunction(() => window.__game.screen === "raid", null, { timeout: 5000 });
+  await frames(15);
+  await ev(() => { window.__game.raid.player.hp = 99; });
+  await quiet();
+
+  // 1. start arena: camera II, no background
+  let c = await cam();
+  info.arena = c;
+  expect(c.mode === "II" && near(c.yaw, 45, 0.5) && near(c.pitch, 30, 0.5), "start arena should be camera II 45/30: " + JSON.stringify(c));
+  expect(c.background === 0, "no background in camera II");
+  expect((await ev(() => window.__game.zone)) === "arena", "start zone should be arena");
+  expect(await vis("#btn-fire"), "fire button should be shown in an arena");
+  await page.screenshot({ path: "screenshots/play-arena.png" });
+  // perf: frames in a settled camera come from the terrain cache
+  await frames(120);
+  info.perfArena = await ev(() => ({ ...window.__game.perf, fps: window.__fps }));
+  expect(info.perfArena.usedCache, "settled camera should blit the cached terrain");
+  expect(info.perfArena.terrainBuilds >= 1, "terrain cache never built");
+
+  // 2. see-through: stand directly behind a rock as seen from the camera (the camera sits toward -x,+y)
+  const rock = await ev(() => {
+    const rows = window.__game.raid.map.rows;
+    for (let y = 1; y < rows.length - 1; y++) for (let x = 5; x < 20; x++) if (rows[y][x] === "#" && rows[y][x + 1] === "#") return { x: x + 1, y: y + 0.5 };
+    return null;
+  });
+  expect(rock, "no two-tile rock found in the start arena");
+  await ev(() => { window.__game.raid.crawlers.forEach((k) => (k.alive = false)); });
+  await teleport(rock.x + 0.9, rock.y - 0.9);
+  await frames(20);
+  info.seeThrough = await ev(() => window.__game.seeThrough);
+  expect(info.seeThrough > 0, "no rock drawn see-through when standing behind it");
+  await page.screenshot({ path: "screenshots/play-occlude.png" });
+  await teleport(rock.x - 3, rock.y + 3); // clear of every rock: nothing dithered
+  await frames(10);
+  expect((await ev(() => window.__game.seeThrough)) === 0, "a rock stayed see-through with nothing behind it");
+
+  // 3. walk onto the first ledge: hold D+W (world east in camera II); the swing starts at the ledge mouth
+  await teleport(16.5, 9);
+  await frames(5);
+  await page.keyboard.down("d");
+  await page.keyboard.down("w");
+  await page.waitForFunction(() => {
+    const g = window.__game;
+    if (g.zone === "path" && g.cam.u > 0.35 && g.cam.u < 0.65) { g.paused = true; return true; }
+    return false;
+  }, null, { timeout: 60000, polling: "raf" });
+  const mid = await cam();
+  info.swing = mid;
+  expect(mid.yaw > 5 && mid.yaw < 40 && mid.pitch > 14 && mid.pitch < 28, "mid-swing yaw/pitch should be between the cameras: " + JSON.stringify(mid));
+  expect(near(mid.yaw / 45, (mid.pitch - 12) / 18, 0.02), "yaw and pitch should swing together");
+  expect(mid.background > 0.2 && mid.background < 0.8, "background should be fading in mid-swing: " + mid.background);
+  await frames(2);
+  info.perfSwing = await ev(() => ({ ...window.__game.perf }));
+  expect(!info.perfSwing.usedCache, "the swing must rasterise the terrain live, not blit the cache");
+  await page.screenshot({ path: "screenshots/play-swing.png" });
+  await ev(() => { window.__game.paused = false; });
+  await page.keyboard.up("w");
+
+  // 4. settled camera I with the vista
+  await page.waitForFunction(() => window.__game.cam.u === 0, null, { timeout: 60000 });
+  await frames(5);
+  c = await cam();
+  info.ledge = c;
+  expect(c.mode === "I" && near(c.yaw, 0, 0.01) && near(c.pitch, 12, 0.01), "ledge should settle at camera I 0/12: " + JSON.stringify(c));
+  expect(c.background === 1, "background should be fully visible in camera I");
+  expect((await ev(() => window.__game.zone)) === "path", "ledge zone should be path");
+  expect(!(await vis("#btn-fire")), "fire button should be hidden on a ledge");
+  info.perfLedge = await ev(() => ({ ...window.__game.perf, fps: window.__fps }));
+
+  // 5. walk the ledge with D: x grows, y stays on the lane; firing is ignored (no bullets, no shots)
+  const lx0 = await ev(() => window.__game.raid.player.pos.x);
+  const shots0 = await ev(() => window.__game.shots);
+  await page.keyboard.down("Space");
+  let maxDev = 0, maxBullets = 0;
+  for (let i = 0; i < 12; i++) {
+    await frames(15);
+    const p = await ev(() => ({ ...window.__game.raid.player.pos, zone: window.__game.zone, b: window.__game.raid.bullets.length }));
+    if (p.zone === "path") maxDev = Math.max(maxDev, Math.abs(p.y - 9));
+    maxBullets = Math.max(maxBullets, p.b);
+    if (p.x > 30) break;
+  }
+  await page.keyboard.up("Space");
+  const lx1 = await ev(() => window.__game.raid.player.pos.x);
+  info.walk = { x0: +lx0.toFixed(2), x1: +lx1.toFixed(2), maxLaneDeviation: +maxDev.toFixed(2), maxBullets, shots: (await ev(() => window.__game.shots)) - shots0 };
+  expect(lx1 > lx0 + 3, "holding D on the ledge did not move the player east");
+  expect(maxDev < 0.5, "player left the lane: " + maxDev);
+  expect(maxBullets === 0 && info.walk.shots === 0, "firing on a ledge produced bullets: " + JSON.stringify(info.walk));
+  expect((await ev(() => window.__game.raid.state)) === "running", "raid should still be running");
+  await page.screenshot({ path: "screenshots/play-ledge-walk.png" });
+
+  // 6. out of the east end into the loot arena: camera II again
+  await page.waitForFunction(() => window.__game.raid.player.pos.x > 34.8, null, { timeout: 60000 });
+  await page.keyboard.up("d");
+  await page.waitForFunction(() => window.__game.cam.u === 1, null, { timeout: 60000 });
+  c = await cam();
+  info.lootArena = c;
+  expect(c.mode === "II" && near(c.yaw, 45, 0.01) && near(c.pitch, 30, 0.01), "loot arena should be camera II again: " + JSON.stringify(c));
+  expect((await ev(() => window.__game.zone)) === "arena", "loot arena zone should be arena");
+  await frames(10);
+  await page.screenshot({ path: "screenshots/play-loot-arena.png" });
+
+  // 6b. crawlers give up at the ledge mouth: one west of the first ledge, the player on it, watch 400 frames
+  await ev(() => {
+    const r = window.__game.raid;
+    r.crawlers.length = 0;
+    r.crawlers.push({ pos: { x: 17.5, y: 9 }, vel: { x: 0, y: 0 }, hp: 4, alive: true, touchCooldown: 0, airborne: 0 });
+  });
+  await teleport(27, 9);
+  await ev(() => {
+    const r = window.__game.raid;
+    window.__watch = { onPath: 0, maxX: 0 };
+    const k = r.crawlers[0];
+    const tick = () => { if (r.crawlers[0] !== k) return; if (r.tileAt(k.pos.x, k.pos.y) === "=") window.__watch.onPath++; window.__watch.maxX = Math.max(window.__watch.maxX, k.pos.x); requestAnimationFrame(tick); };
+    tick();
+  });
+  await frames(400);
+  info.crawler = await ev(() => ({ ...window.__watch, hp: window.__game.raid.player.hp }));
+  expect(info.crawler.onPath === 0, "a crawler stepped onto a '=' tile");
+  expect(info.crawler.maxX > 18.5 && info.crawler.maxX < 20, "crawler should have chased to the ledge mouth: " + info.crawler.maxX);
+  expect(info.crawler.hp === 99, "a crawler bit the player on the ledge");
+
+  // 7. extraction ring (projected), progress half lit
+  const ex = await ev(() => window.__game.raid.map.extraction);
+  await ev(() => { window.__game.raid.crawlers.length = 0; });
+  await teleport(ex.x, ex.y);
+  await ev(() => { window.__game.raid.extractTimer = 1.6; window.__game.paused = true; });
+  await frames(3);
+  await page.screenshot({ path: "screenshots/play-extract.png" });
+  await ev(() => { window.__game.paused = false; });
+  await page.waitForFunction(() => window.__game.screen === "results", null, { timeout: 90000 });
+  expect((await ev(() => window.__game.raid.state)) === "extracted", "should have extracted from the east arena");
+
+  // ---- M5: vista layers, ledge pull-back, knowledge reveals ------------------------------------
   const setKnowledge = (list) => ev((k) => {
     const P = JSON.parse(localStorage.getItem("progress") ?? "{}");
     P.knowledge = k;
     localStorage.setItem("progress", JSON.stringify(P));
   }, list);
-  const raidAtCliff = async (time) => {
+  const raidOnLedge = async (time, pos = [26.5, 9]) => {
     await page.reload();
     await page.evaluate(() => { window.__toasts = []; new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.textContent) window.__toasts.push(n.textContent); }).observe(document.body, { childList: true, subtree: true }); });
     await page.waitForFunction(() => window.__ready === true, null, { timeout: 15000 });
@@ -475,12 +620,13 @@ try {
     await page.click("#btn-start");
     await page.waitForFunction(() => window.__game.screen === "raid", null, { timeout: 5000 });
     await frames(5);
-    await ev((tm) => {
+    await ev(([tm, pos]) => {
       const r = window.__game.raid;
       if (tm !== null) r.time = tm;
-      for (const c of r.crawlers) c.alive = false; // keep the lookout undisturbed
-      r.player.pos.x = 38.5; r.player.pos.y = 4.5; r.player.vel.x = 0; r.player.vel.y = 0; r.player.hp = 6; // 1.5 m from the east cliff
-    }, time);
+      for (const k of r.crawlers) k.alive = false; // keep the pull-back undisturbed
+      r.player.pos.x = pos[0]; r.player.pos.y = pos[1]; r.player.vel.x = 0; r.player.vel.y = 0; r.player.hp = 99; // middle of the first ledge
+      window.__game.snapCamera();
+    }, [time, pos]);
   };
   const waitLookout = async () => {
     for (let i = 0; i < 400; i++) {
@@ -489,11 +635,12 @@ try {
     }
     return false;
   };
-  const settle = () => ev(() => { const r = window.__game.raid; r.player.hp = 6; for (const c of r.crawlers) c.alive = false; });
+  const settle = () => ev(() => { const r = window.__game.raid; r.player.hp = 99; for (const k of r.crawlers) k.alive = false; });
 
   await setKnowledge([]);
-  await raidAtCliff(null);
-  expect(await waitLookout(), "plain: lookout never reached 0.9");
+  await raidOnLedge(null);
+  expect(await ev(() => window.__game.zoom) < 1.05, "plain: pull-back must not start before standing still");
+  expect(await waitLookout(), "plain: ledge pull-back never reached 0.9");
   await frames(6);
   const plain = await ev(() => ({ look: window.__game.lookout, zoom: window.__game.zoom, rev: window.__game.revealed, hud: getComputedStyle(document.getElementById("weapon-hud")).opacity, hp: getComputedStyle(document.querySelector(".hp")).opacity }));
   info.vistaPlain = plain;
@@ -503,8 +650,18 @@ try {
   await page.screenshot({ path: "screenshots/play-vista-plain.png" });
 
   await setKnowledge(["mechanics", "radiochem", "physiology", "celestial", "electrochem"]);
-  await raidAtCliff(211.2);
-  expect(await waitLookout(), "known: lookout never reached 0.9");
+  await raidOnLedge(211.2);
+  await settle();
+  await frames(6);
+  // the ledge at normal zoom with every reveal shown (frozen before the pull-back starts)
+  await ev(() => { window.__game.paused = true; });
+  await frames(3);
+  const early = await ev(() => ({ look: window.__game.lookout, zoom: window.__game.zoom, rev: [...window.__game.revealed].sort(), toasts: window.__toasts.filter((x) => x.startsWith("관측")) }));
+  expect(early.zoom < 1.05, "known: pull-back started too early: " + JSON.stringify(early));
+  expect(early.rev.join() === "celestial,electrochem,physiology,radiochem", "known: reveals shown on the ledge " + early.rev);
+  await page.screenshot({ path: "screenshots/play-ledge.png" });
+  await ev(() => { window.__game.paused = false; });
+  expect(await waitLookout(), "known: ledge pull-back never reached 0.9");
   await settle();
   await frames(10);
   const known = await ev(() => ({ look: window.__game.lookout, zoom: window.__game.zoom, rev: [...window.__game.revealed].sort(), dl: window.__game.raid.daylight, toasts: window.__toasts.filter((x) => x.startsWith("관측")) }));
@@ -513,15 +670,23 @@ try {
   expect(known.toasts.length === 4 && known.toasts.some((x) => x.includes("지층의 나이가 보인다 (방사화학)")), "known: reveal toasts " + JSON.stringify(known.toasts));
   expect(known.dl > 0.2 && known.dl < 0.6, "known: should be dusk, daylight " + known.dl);
   await page.screenshot({ path: "screenshots/play-vista-known.png" });
-  // moving cancels the zoom quickly
+  // moving cancels the pull-back quickly
   await page.keyboard.down("a");
-  await frames(14);
+  await frames(20);
   const moving = await ev(() => ({ look: window.__game.lookout, zoom: window.__game.zoom }));
   await page.keyboard.up("a");
   info.vistaMoving = moving;
-  expect(moving.look < 0.1 && moving.zoom < 1.1, "moving did not cancel the lookout: " + JSON.stringify(moving));
-  expect(await ev(() => window.__game.raid.state) === "running", "raid must keep running during lookout");
+  expect(moving.look < 0.1 && moving.zoom < 1.1, "moving did not cancel the pull-back: " + JSON.stringify(moving));
+  expect(await ev(() => window.__game.raid.state) === "running", "raid must keep running during the pull-back");
 
+  // reveals belong to camera I: not shown while the camera is II (a fresh raid in the start arena, dusk, all knowledge)
+  await raidOnLedge(211.2, [6, 13]);
+  await frames(30);
+  info.arenaReveals = await ev(() => ({ rev: window.__game.revealed, bg: window.__game.cam.background }));
+  expect(info.arenaReveals.rev.length === 0 && info.arenaReveals.bg === 0, "reveals must not fire in camera II: " + JSON.stringify(info.arenaReveals));
+
+  // perf readout in a plain arena
+  info.perf = await ev(() => ({ ...window.__game.perf, fps: window.__fps }));
   info.fps = await ev(() => window.__fps);
 } catch (e) {
   errors.push("exception: " + (e?.stack || e));

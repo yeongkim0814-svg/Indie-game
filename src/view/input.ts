@@ -104,6 +104,8 @@ export class Input {
   /** Dash is an edge: Raid.step sees it for one step, then it is cleared. */
   consumeDash() { this.state.dash = false; }
 
+  get isFireLocked() { return this.fireLocked; }
+
   /** Disable (and hide) the fire button, e.g. while the bag is open; the joystick keeps working. */
   setFireLocked(lock: boolean) {
     this.fireLocked = lock;
